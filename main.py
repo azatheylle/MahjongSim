@@ -39,6 +39,25 @@ app.tutorialOpen = False
 app.tutorialPage = 0
 app.tutorialButtonTargets = []
 
+app.currentScene = 'room'
+
+app.playerX = 200
+app.playerY = 300
+app.playerSize = 18
+app.playerSpeed = 4
+
+app.moveUp = False
+app.moveDown = False
+app.moveLeft = False
+app.moveRight = False
+
+app.tableX = 150
+app.tableY = 120
+app.tableW = 100
+app.tableH = 60
+
+app.playerNearTable = False
+
 TileIndexMap = {
     '1m': 0, '2m': 1, '3m': 2, '4m': 3, '5m': 4, '6m': 5, '7m': 6, '8m': 7, '9m': 8,
     '1p': 9, '2p': 10, '3p': 11, '4p': 12, '5p': 13, '6p': 14, '7p': 15, '8p': 16, '9p': 17,
@@ -966,8 +985,54 @@ def draw_tutorial_overlay():
             'h': 40
             })
         
+def update_room_interaction_state():
+    playerLeft = app.playerX - app.playerSize / 2
+    playerRight = app.playerX + app.playerSize / 2
+    playerTop = app.playerY - app.playerSize / 2
+    playerBottom = app.playerY + app.playerSize / 2
 
-def redraw_game():
+    rangePadding = 20
+
+    tableLeft = app.tableX - rangePadding
+    tableRight = app.tableX + app.tableW + rangePadding
+    tableTop = app.tableY - rangePadding
+    tableBottom = app.tableY + app.tableH + rangePadding
+
+    app.playerNearTable = (
+        playerRight >= tableLeft and
+        playerLeft <= tableRight and
+        playerBottom >= tableTop and
+        playerTop <= tableBottom
+    )
+
+def draw_room_scene():
+    app.scene.add(Rect(0, 0, 400, 400, fill=rgb(84, 62, 44)))
+    app.scene.add(Rect(20, 20, 360, 360, fill=rgb(132, 94, 66)))
+
+    app.scene.add(Label('Mahjong Room', 200, 25, size=18, fill='white', bold=True))
+
+    # table
+    app.scene.add(Rect(app.tableX, app.tableY, app.tableW, app.tableH,
+                       fill=rgb(40, 120, 70), border='black', borderWidth=2))
+    app.scene.add(Label('Mahjong Table',
+                        app.tableX + app.tableW / 2,
+                        app.tableY + app.tableH / 2,
+                        size=12, fill='white', bold=True))
+
+    # player
+    app.scene.add(Rect(app.playerX - app.playerSize / 2,
+                       app.playerY - app.playerSize / 2,
+                       app.playerSize,
+                       app.playerSize,
+                       fill='gold', border='black'))
+
+    app.scene.add(Label('WASD to move', 75, 370, size=12, fill='white'))
+    app.scene.add(Label('Walk to the table', 200, 370, size=12, fill='white'))
+
+    if app.playerNearTable:
+        app.scene.add(Label('Press E to play Mahjong', 200, 90, size=14, fill='yellow', bold=True))
+
+def draw_mahjong_scene():
     app.scene.clear()
     app.clickTargets = []
     
@@ -1074,7 +1139,14 @@ def redraw_game():
     draw_round_result_overlay()
     draw_tutorial_overlay()
     
-    
+def redraw_game():
+    app.scene.clear()
+
+    if app.currentScene == 'room':
+        draw_room_scene()
+    elif app.currentScene == 'mahjong':
+        draw_mahjong_scene()
+
 def point_in_rect(mouseX, mouseY, rectX, rectY, rectW, rectH):
     return (
         mouseX >= rectX and
@@ -1366,7 +1438,33 @@ def check_wall_empty_loss():
         return True
     return False
 
+def update_room():
+    if app.moveUp:
+        app.playerY -= app.playerSpeed
+    if app.moveDown:
+        app.playerY += app.playerSpeed
+    if app.moveLeft:
+        app.playerX -= app.playerSpeed
+    if app.moveRight:
+        app.playerX += app.playerSpeed
+
+    if app.playerX < app.playerSize / 2:
+        app.playerX = app.playerSize / 2
+    if app.playerX > 400 - app.playerSize / 2:
+        app.playerX = 400 - app.playerSize / 2
+    if app.playerY < app.playerSize / 2:
+        app.playerY = app.playerSize / 2
+    if app.playerY > 400 - app.playerSize / 2:
+        app.playerY = 400 - app.playerSize / 2
+
+    update_room_interaction_state()
+
 def onStep():
+    if app.currentScene == 'room':
+        update_room()
+        redraw_game()
+        return
+
     if app.handOver == True:
         return
     
@@ -1426,10 +1524,40 @@ def toggle_player_menzenchin_for_test():
     redraw_game()
 
 def onKeyPress(key):
-    if key == 'm':
-        toggle_player_menzenchin_for_test()
+    if app.currentScene == 'room':
+        if key == 'w':
+            app.moveUp = True
+        elif key == 's':
+            app.moveDown = True
+        elif key == 'a':
+            app.moveLeft = True
+        elif key == 'd':
+            app.moveRight = True
+        elif key == 'e':
+            if app.playerNearTable:
+                app.currentScene = 'mahjong'
+                redraw_game()
+        return
+
+    if app.currentScene == 'mahjong':
+        if key == 'escape':
+            app.currentScene = 'room'
+            redraw_game()
+            return
+
+def onKeyRelease(key):
+    if key == 'w':
+        app.moveUp = False
+    elif key == 's':
+        app.moveDown = False
+    elif key == 'a':
+        app.moveLeft = False
+    elif key == 'd':
+        app.moveRight = False
 
 def onMousePress(mouseX, mouseY):
+    if app.currentScene != 'mahjong':
+        return
     if app.tutorialOpen:
         for target in app.tutorialButtonTargets:
             if point_in_rect(mouseX, mouseY, target['x'], target['y'], target['w'], target['h']):
