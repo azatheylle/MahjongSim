@@ -31,6 +31,8 @@ app.lastDiscarder = None
 app.pendingChiOptions = []
 app.pendingCallTile = None
 app.pendingCallDiscarder = None
+app.pendingKanTile = None
+app.pendingKanType = None
 app.roundResult = None
 app.roundResultReason = ''
 app.noYakuWarning = ''
@@ -56,7 +58,16 @@ app.tableY = 120
 app.tableW = 100
 app.tableH = 60
 
+app.handSelectTableX = 250
+app.handSelectTableY = 280
+app.handSelectTableW = 100
+app.handSelectTableH = 60
+
 app.playerNearTable = False
+app.playerNearHandSelectTable = False
+app.handSelectionButtonTargets = []
+app.customHandInput = ''
+app.customHandError = ''
 
 TileIndexMap = {
     '1m': 0, '2m': 1, '3m': 2, '4m': 3, '5m': 4, '6m': 5, '7m': 6, '8m': 7, '9m': 8,
@@ -121,6 +132,8 @@ def reset_round_state():
     app.pendingChiOptions = []
     app.pendingCallTile = None
     app.pendingCallDiscarder = None
+    app.pendingKanTile = None
+    app.pendingKanType = None
     app.roundResult = None
     app.roundResultReason = ''
     app.noYakuWarning = ''
@@ -151,6 +164,42 @@ def deal_starting_hands():
         sort_hand(player['hand'])
         
     return players, newWall
+
+def validate_and_parse_hand(inputStr):
+    """Parse and validate a hand input string like 'E, E, E, 1m, 2p, ...'
+    Returns (hand, errorMessage) where hand is None if invalid"""
+    
+    if not inputStr.strip():
+        return None, 'Please enter tiles'
+    
+    # Parse the input
+    tilesToString = inputStr.strip().split(',')
+    tiles = []
+    
+    for tileStr in tilesToString:
+        tile = tileStr.strip()
+        
+        if not tile:
+            continue
+            
+        # Validate tile format
+        if tile not in TileIndexMap:
+            return None, f'Invalid tile: {tile}'
+        
+        tiles.append(tile)
+    
+    # Check tile count
+    if len(tiles) != 14:
+        return None, f'Need exactly 14 tiles, got {len(tiles)}'
+    
+    # Check for duplicates (max 4 of any tile)
+    tileCounts = {}
+    for tile in tiles:
+        tileCounts[tile] = tileCounts.get(tile, 0) + 1
+        if tileCounts[tile] > 4:
+            return None, f'Too many {tile}s (max 4, got {tileCounts[tile]})'
+    
+    return tiles, None
 
 app.players, app.wall = deal_starting_hands()
 app.hand = app.players[0]['hand']
@@ -655,6 +704,15 @@ def update_player_action_prompt():
     fullHand = app.hand[:]
     if app.drawnTile != None:
         fullHand.append(app.drawnTile)
+    
+    # Check for closed kan first
+    closedKanTiles = get_player_closed_kan_tiles()
+    if len(closedKanTiles) > 0:
+        for tile in closedKanTiles:
+            app.actionOptions.append('Kan ' + tile)
+        app.actionOptions.append('Pass')
+        app.actionPromptOpen = True
+        return
         
     if is_standard_win_with_calls(fullHand) and has_player_yaku('tsumo'):
         app.actionOptions = ['Tsumo', 'Pass']
@@ -697,6 +755,8 @@ def show_player_chi_choice_prompt():
 def get_action_button_width(action):
     if action.startswith('Chi '):
         return 80
+    if action.startswith('Kan '):
+        return 50
     return 50
         
 def get_centered_action_buttons_start_x(actions, gap):
@@ -730,6 +790,9 @@ def draw_action_buttons():
         if action.startswith('Chi '):
             color = 'lightGreen'
             textColor = 'black'
+        elif action.startswith('Kan '):
+            color = 'mediumpurple'
+            textColor = 'white'
         elif action == 'Tsumo':
             color = 'crimson'
             textColor = 'white'
@@ -781,6 +844,120 @@ def start_new_hand():
     app.HandX = (400 - app.TotalHandWidth) / 2
     
     redraw_game()
+
+def start_with_custom_hand(playerHand):
+    reset_round_state()
+    
+    # Create the wall without the player's hand
+    newWall = build_wall()
+    
+    # Remove player's hand from wall
+    playerHandCopy = playerHand[:]
+    for tile in playerHandCopy:
+        if tile in newWall:
+            newWall.remove(tile)
+    
+    random.shuffle(newWall)
+    
+    # Deal hands for other players
+    players = [
+        {'hand': playerHand[:], 'discards': [], 'calls': [], 'isMenzenchin': True},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True}
+    ]
+    
+    # Deal to other players
+    for roundNumber in range(13):
+        for playerIndex in range(1, 4):
+            if len(newWall) > 0:
+                players[playerIndex]['hand'].append(newWall.pop())
+    
+    # Player's hand is already set
+    app.players = players
+    app.wall = newWall
+    app.hand = app.players[0]['hand']
+    
+    app.TotalHandWidth = len(app.hand) * TileWidth + (len(app.hand) - 1) * TileGap
+    app.HandX = (400 - app.TotalHandWidth) / 2
+    
+    app.currentScene = 'mahjong'
+    redraw_game()
+
+def draw_hand_select_scene():
+    app.scene.clear()
+    app.handSelectionButtonTargets = []
+    
+    app.scene.add(Rect(0, 0, 400, 400, fill=rgb(34, 120, 70)))
+    app.scene.add(Label('Enter Your Starting Hand', 200, 25, size=18, fill='white', bold=True))
+    
+    # Instructions
+    app.scene.add(Label('Format: E, E, E, 1m, 2p, 3s, ...', 200, 55, size=12, fill='lightBlue', bold=True))
+    app.scene.add(Label('Need exactly 14 tiles, max 4 of each', 200, 75, size=11, fill='white'))
+    
+    # Input box
+    inputBoxX = 30
+    inputBoxY = 110
+    inputBoxW = 340
+    inputBoxH = 60
+    
+    app.scene.add(Rect(inputBoxX, inputBoxY, inputBoxW, inputBoxH, fill='white', border='lightBlue', borderWidth=2))
+    
+    # Display the input text
+    displayText = app.customHandInput
+    if len(displayText) > 60:
+        displayText = displayText[:57] + '...'
+    
+    app.scene.add(Label(displayText, inputBoxX + 10, inputBoxY + 20, size=11, fill='black', align='left'))
+    
+    # Register input box as clickable
+    app.handSelectionButtonTargets.append({
+        'type': 'inputBox',
+        'x': inputBoxX,
+        'y': inputBoxY,
+        'w': inputBoxW,
+        'h': inputBoxH
+    })
+    
+    # Error message
+    if app.customHandError != '':
+        app.scene.add(Label(app.customHandError, 200, 190, size=12, fill='red', bold=True))
+    
+    # Submit button
+    submitX = 80
+    submitY = 240
+    submitW = 240
+    submitH = 40
+    
+    app.scene.add(Rect(submitX, submitY, submitW, submitH, fill='lightGreen', border='white', borderWidth=2))
+    app.scene.add(Label('Submit', 200, submitY + 20, size=14, fill='darkGreen', bold=True))
+    
+    app.handSelectionButtonTargets.append({
+        'type': 'submit',
+        'x': submitX,
+        'y': submitY,
+        'w': submitW,
+        'h': submitH
+    })
+    
+    # Clear button
+    clearX = 80
+    clearY = 300
+    clearW = 240
+    clearH = 40
+    
+    app.scene.add(Rect(clearX, clearY, clearW, clearH, fill='lightCoral', border='white', borderWidth=2))
+    app.scene.add(Label('Clear', 200, clearY + 20, size=14, fill='darkRed', bold=True))
+    
+    app.handSelectionButtonTargets.append({
+        'type': 'clear',
+        'x': clearX,
+        'y': clearY,
+        'w': clearW,
+        'h': clearH
+    })
+    
+    app.scene.add(Label('Press ESC to go back', 200, 390, size=12, fill='white'))
 
 def draw_round_result_overlay():
     app.resultButtonTarget = None
@@ -1004,6 +1181,18 @@ def update_room_interaction_state():
         playerBottom >= tableTop and
         playerTop <= tableBottom
     )
+    
+    handSelectTableLeft = app.handSelectTableX - rangePadding
+    handSelectTableRight = app.handSelectTableX + app.handSelectTableW + rangePadding
+    handSelectTableTop = app.handSelectTableY - rangePadding
+    handSelectTableBottom = app.handSelectTableY + app.handSelectTableH + rangePadding
+    
+    app.playerNearHandSelectTable = (
+        playerRight >= handSelectTableLeft and
+        playerLeft <= handSelectTableRight and
+        playerBottom >= handSelectTableTop and
+        playerTop <= handSelectTableBottom
+    )
 
 def draw_room_scene():
     app.scene.add(Rect(0, 0, 400, 400, fill=rgb(84, 62, 44)))
@@ -1011,12 +1200,20 @@ def draw_room_scene():
 
     app.scene.add(Label('Mahjong Room', 200, 25, size=18, fill='white', bold=True))
 
-    # table
+    # main table
     app.scene.add(Rect(app.tableX, app.tableY, app.tableW, app.tableH,
                        fill=rgb(40, 120, 70), border='black', borderWidth=2))
-    app.scene.add(Label('Mahjong Table',
+    app.scene.add(Label('Random Hand',
                         app.tableX + app.tableW / 2,
                         app.tableY + app.tableH / 2,
+                        size=12, fill='white', bold=True))
+    
+    # hand select table
+    app.scene.add(Rect(app.handSelectTableX, app.handSelectTableY, app.handSelectTableW, app.handSelectTableH,
+                       fill=rgb(40, 120, 70), border='black', borderWidth=2))
+    app.scene.add(Label('Choose Hand',
+                        app.handSelectTableX + app.handSelectTableW / 2,
+                        app.handSelectTableY + app.handSelectTableH / 2,
                         size=12, fill='white', bold=True))
 
     # player
@@ -1027,10 +1224,13 @@ def draw_room_scene():
                        fill='gold', border='black'))
 
     app.scene.add(Label('WASD to move', 75, 370, size=12, fill='white'))
-    app.scene.add(Label('Walk to the table', 200, 370, size=12, fill='white'))
+    app.scene.add(Label('Walk to a table', 200, 370, size=12, fill='white'))
 
     if app.playerNearTable:
-        app.scene.add(Label('Press E to play Mahjong', 200, 90, size=14, fill='yellow', bold=True))
+        app.scene.add(Label('Press E to play with random hand', 200, 90, size=14, fill='yellow', bold=True))
+    
+    if app.playerNearHandSelectTable:
+        app.scene.add(Label('Press E to choose starting hand', 200, 90, size=14, fill='yellow', bold=True))
 
 def draw_mahjong_scene():
     app.scene.clear()
@@ -1146,6 +1346,8 @@ def redraw_game():
         draw_room_scene()
     elif app.currentScene == 'mahjong':
         draw_mahjong_scene()
+    elif app.currentScene == 'handSelect':
+        draw_hand_select_scene()
 
 def point_in_rect(mouseX, mouseY, rectX, rectY, rectW, rectH):
     return (
@@ -1156,6 +1358,11 @@ def point_in_rect(mouseX, mouseY, rectX, rectY, rectW, rectH):
         )
         
 def draw_tile_for_player():
+    # Add the currently drawn tile to hand if one exists
+    if app.drawnTile is not None:
+        app.hand.append(app.drawnTile)
+        sort_hand(app.hand)
+    
     if len(app.wall) == 0:
         return
     
@@ -1227,8 +1434,21 @@ def can_player_pon(tile):
     
 def can_player_kan_on_discard(tile):
     return app.hand.count(tile) >= 3
-    
-    
+
+
+def get_player_closed_kan_tiles():
+    kanTiles = []
+    for tile in HonorOrder:
+        if app.hand.count(tile) >= 4:
+            kanTiles.append(tile)
+    for suit in ['m', 'p', 's']:
+        for number in range(1, 10):
+            tile = str(number) + suit
+            if app.hand.count(tile) >= 4:
+                kanTiles.append(tile)
+    return kanTiles
+
+
 def get_player_chi_options(tile, discarderIndex):
     chiOptions = []
     
@@ -1267,6 +1487,9 @@ def get_player_open_call_actions(tile, discarderIndex):
     
     if can_player_pon(tile):
         actions.append('Pon')
+    
+    if can_player_kan_on_discard(tile):
+        actions.append('Kan')
         
     chiOptions = get_player_chi_options(tile, discarderIndex)
     if len(chiOptions) > 0:
@@ -1350,6 +1573,65 @@ def resolve_player_chi(chiTiles):
     app.pendingCallDiscarder = None
     update_no_yaku_warning()
 
+
+def resolve_player_closed_kan(tile):
+    if app.hand.count(tile) < 4:
+        return
+    
+    remove_tiles_from_hand(app.hand, tile, 4)
+    app.players[0]['calls'].append({
+        'type': 'Kan',
+        'tiles': [tile, tile, tile, tile],
+        'from': -1
+        })
+    
+    set_player_open_hand(0)
+    
+    app.currentPlayer = 0
+    app.selectedHandIndex = None
+    app.previewTile = tile
+    sort_hand(app.hand)
+    
+    # Draw a replacement tile
+    draw_tile_for_player()
+    
+    update_no_yaku_warning()
+    update_player_action_prompt()
+
+
+def resolve_player_open_kan():
+    tile = app.pendingKanTile
+    discarder = app.pendingCallDiscarder
+    
+    if tile == None or discarder == None:
+        return
+    
+    remove_tiles_from_hand(app.hand, tile, 3)
+    app.players[0]['calls'].append({
+        'type': 'Kan',
+        'tiles': [tile, tile, tile, tile],
+        'from': discarder
+        })
+    
+    remove_last_discard_from_player(discarder)
+    set_player_open_hand(0)
+    
+    app.currentPlayer = 0
+    app.aiThinking = False
+    app.pendingAiPlayers = []
+    app.selectedHandIndex = None
+    app.previewTile = tile
+    sort_hand(app.hand)
+    
+    app.pendingKanTile = None
+    app.pendingKanType = None
+    
+    # Draw a replacement tile
+    draw_tile_for_player()
+    
+    update_no_yaku_warning()
+    update_player_action_prompt()
+
 def end_round_as_win(reason):
     app.handOver = True
     app.roundResult = 'win'
@@ -1368,11 +1650,13 @@ def end_round_as_loss(reason):
 
 def handle_action_button(action):
     
+    # wasReactionPrompt is true for reactions to OTHER PLAYERS' discards (Ron, Pon, Chi, open Kan)
+    # NOT for closed kans, which are player actions on their own turn
     wasReactionPrompt = (
         'Ron' in app.actionOptions or
         'Pon' in app.actionOptions or
         'Chi' in app.actionOptions or
-        'Kan' in app.actionOptions
+        'Kan' in app.actionOptions  # only open kan on discard, not closed kans
         )
     
     if action == 'Tsumo':
@@ -1408,12 +1692,15 @@ def handle_action_button(action):
             app.gameMessage = 'CHI'
             app.actionPromptOpen = False
             app.actionOptions = []
-        
-    elif action == 'Kan':
-        set_player_open_hand(0)
+    
+    elif action.startswith('Kan '):
+        kanTile = action[4:]
+        resolve_player_closed_kan(kanTile)
         app.gameMessage = 'KAN'
-        app.actionPromptOpen = False
-        app.actionOptions = []
+    
+    elif action == 'Kan':
+        resolve_player_open_kan()
+        app.gameMessage = 'KAN'
         
     elif action == 'Pass':
         app.actionPromptOpen = False
@@ -1421,6 +1708,8 @@ def handle_action_button(action):
         app.pendingChiOptions = []
         app.pendingCallTile = None
         app.pendingCallDiscarder = None
+        app.pendingKanTile = None
+        app.pendingKanType = None
         
         if wasReactionPrompt:
             if len(app.pendingAiPlayers) > 0:
@@ -1504,6 +1793,7 @@ def onStep():
         openCallActions = get_player_open_call_actions(app.lastDiscardedTile, currentAi)
         if len(openCallActions) > 0:
             app.pendingCallTile = app.lastDiscardedTile
+            app.pendingKanTile = app.lastDiscardedTile
             app.pendingCallDiscarder = currentAi
             show_player_discard_call_options(openCallActions)
             
@@ -1537,6 +1827,42 @@ def onKeyPress(key):
             if app.playerNearTable:
                 app.currentScene = 'mahjong'
                 redraw_game()
+            elif app.playerNearHandSelectTable:
+                app.currentScene = 'handSelect'
+                app.customHandInput = ''
+                app.customHandError = ''
+                redraw_game()
+        return
+    
+    if app.currentScene == 'handSelect':
+        if key == 'escape':
+            app.currentScene = 'room'
+            app.customHandInput = ''
+            app.customHandError = ''
+            redraw_game()
+            return
+        elif key == 'backspace':
+            app.customHandInput = app.customHandInput[:-1]
+            app.customHandError = ''
+            redraw_game()
+            return
+        elif key == 'enter':
+            # Treat enter as submit
+            hand, error = validate_and_parse_hand(app.customHandInput)
+            if error:
+                app.customHandError = error
+                redraw_game()
+            else:
+                start_with_custom_hand(hand)
+                app.customHandInput = ''
+                app.customHandError = ''
+            return
+        else:
+            # Add character to input
+            if len(key) == 1:
+                app.customHandInput += key
+                app.customHandError = ''
+                redraw_game()
         return
 
     if app.currentScene == 'mahjong':
@@ -1556,6 +1882,31 @@ def onKeyRelease(key):
         app.moveRight = False
 
 def onMousePress(mouseX, mouseY):
+    if app.currentScene == 'handSelect':
+        for target in app.handSelectionButtonTargets:
+            if point_in_rect(mouseX, mouseY, target['x'], target['y'], target['w'], target['h']):
+                if target['type'] == 'inputBox':
+                    # Focus on input box (just for visual feedback)
+                    pass
+                elif target['type'] == 'submit':
+                    # Parse and validate the input
+                    hand, error = validate_and_parse_hand(app.customHandInput)
+                    if error:
+                        app.customHandError = error
+                        redraw_game()
+                    else:
+                        # Valid hand, start the game
+                        start_with_custom_hand(hand)
+                        app.customHandInput = ''
+                        app.customHandError = ''
+                    return
+                elif target['type'] == 'clear':
+                    app.customHandInput = ''
+                    app.customHandError = ''
+                    redraw_game()
+                    return
+        return
+    
     if app.currentScene != 'mahjong':
         return
     if app.tutorialOpen:
