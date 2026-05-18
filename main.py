@@ -58,6 +58,10 @@ app.tableY = 120
 app.tableW = 100
 app.tableH = 60
 
+app.tutorialNpcX = 55
+app.tutorialNpcY = 330
+app.tutorialNpcSize = 22
+
 app.handSelectTableX = 250
 app.handSelectTableY = 280
 app.handSelectTableW = 100
@@ -65,6 +69,7 @@ app.handSelectTableH = 60
 
 app.playerNearTable = False
 app.playerNearHandSelectTable = False
+app.playerNearTutorialNpc = False
 app.handSelectionButtonTargets = []
 app.customHandInput = ''
 app.customHandError = ''
@@ -76,6 +81,10 @@ TileIndexMap = {
     'E': 27, 'S': 28, 'W': 29, 'N': 30, 'Wh': 31, 'G': 32, 'R': 33
     }
 
+TileNamesByIndex = [''] * 34
+for tileName, tileIndex in TileIndexMap.items():
+    TileNamesByIndex[tileIndex] = tileName
+
 TileWidth = 24
 TileHeight = 36
 TileGap = 2
@@ -84,6 +93,13 @@ HandY = 400 - 52
 
 SuitOrder = {'m': 0, 'p': 1, 's': 2}
 HonorOrder = {'E': 0, 'S': 1, 'W': 2, 'N': 3, 'Wh': 4, 'G': 5, 'R': 6}
+
+ThirteenOrphansTiles = {
+    '1m', '9m',
+    '1p', '9p',
+    '1s', '9s',
+    'E', 'S', 'W', 'N', 'Wh', 'G', 'R'
+}
 
 app.drawnTile = None
 
@@ -148,10 +164,10 @@ def deal_starting_hands():
         
 
     players = [
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True}
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False}
     ]
 
     for roundNumber in range(13):
@@ -256,7 +272,7 @@ def draw_honor(x, y, tile):
             draw_center_text(x, y, 'R', size=15, color='red', bold=True)
             
             
-def draw_tile(x, y, tile):
+def draw_tile(x, y, tile, dimmed=False):
     draw_tile_base(x, y)
         
     if tile in HonorOrder:
@@ -271,6 +287,9 @@ def draw_tile(x, y, tile):
             draw_pinzu(x, y, number)
         elif suit == 's':
             draw_souzu(x, y, number)
+
+    if dimmed:
+        app.scene.add(Rect(x, y, TileWidth, TileHeight, fill='lightGray', opacity=55))
                     
                     
 def draw_selected_outline(x, y):
@@ -571,6 +590,101 @@ def can_form_melds(counts):
 def get_player_call_meld_count():
     return len(app.players[0]['calls'])
 
+def is_seven_pairs(hand):
+    if len(hand) != 14:
+        return False
+
+    counts = build_tile_counts(hand)
+    pairCount = 0
+
+    for count in counts:
+        if count == 2:
+            pairCount += 1
+        elif count != 0:
+            return False
+
+    return pairCount == 7
+
+def is_thirteen_orphans(hand):
+    if len(hand) != 14:
+        return False
+
+    counts = build_tile_counts(hand)
+    pairFound = False
+
+    for tileIndex, count in enumerate(counts):
+        if count == 0:
+            continue
+
+        tile = TileNamesByIndex[tileIndex]
+        if tile not in ThirteenOrphansTiles:
+            return False
+
+        if count == 2:
+            if pairFound:
+                return False
+            pairFound = True
+        elif count != 1:
+            return False
+
+    if pairFound == False:
+        return False
+
+    for tile in ThirteenOrphansTiles:
+        if counts[TileIndexMap[tile]] == 0:
+            return False
+
+    return True
+
+def is_valid_win_hand(hand):
+    return is_standard_win_with_calls(hand) or is_seven_pairs(hand) or is_thirteen_orphans(hand)
+
+def hand_is_tenpai_for_riichi(hand):
+    if app.players[0]['calls']:
+        return False
+
+    if len(hand) != 14:
+        return False
+
+    for discardIndex in range(len(hand)):
+        reducedHand = hand[:discardIndex] + hand[discardIndex + 1:]
+
+        for tile in TileIndexMap:
+            candidateHand = reducedHand[:] + [tile]
+            if is_standard_win(candidateHand):
+                return True
+            if is_seven_pairs(candidateHand):
+                return True
+            if is_thirteen_orphans(candidateHand):
+                return True
+
+    return False
+
+def is_tenpai_hand(hand):
+    if len(hand) != 13:
+        return False
+
+    for tile in TileIndexMap:
+        candidateHand = hand[:] + [tile]
+        if is_valid_win_hand(candidateHand):
+            return True
+
+    return False
+
+def get_riichi_legal_discard_indices():
+    fullHand = app.hand[:]
+    if app.drawnTile != None:
+        fullHand.append(app.drawnTile)
+
+    legalIndices = []
+
+    for index in range(len(fullHand)):
+        reducedHand = fullHand[:index] + fullHand[index + 1:]
+        if is_tenpai_hand(reducedHand):
+            legalIndices.append(index)
+
+    return legalIndices
+
 def can_form_partial_melds(counts, meldsNeeded):
     if meldsNeeded == 0:
         for i in range(34):
@@ -676,8 +790,17 @@ def get_all_tiles_for_yaku_check(winType):
             
 def has_player_yaku(winType):
     fullTiles = get_all_tiles_for_yaku_check(winType)
+
+    if app.players[0]['riichiDeclared']:
+        return True
     
     if app.players[0]['isMenzenchin'] and winType == 'tsumo':
+        return True
+
+    if is_seven_pairs(fullTiles):
+        return True
+
+    if is_thirteen_orphans(fullTiles):
         return True
         
     if hand_has_triplet(fullTiles, 'E'):
@@ -714,8 +837,13 @@ def update_player_action_prompt():
         app.actionPromptOpen = True
         return
         
-    if is_standard_win_with_calls(fullHand) and has_player_yaku('tsumo'):
+    if is_valid_win_hand(fullHand) and has_player_yaku('tsumo'):
         app.actionOptions = ['Tsumo', 'Pass']
+        app.actionPromptOpen = True
+        return
+
+    if app.players[0]['isMenzenchin'] and app.players[0]['riichiDeclared'] == False and hand_is_tenpai_for_riichi(fullHand):
+        app.actionOptions = ['Riichi', 'Pass']
         app.actionPromptOpen = True
 
 def update_player_ron_prompt():
@@ -728,7 +856,7 @@ def update_player_ron_prompt():
     fullHand = app.hand[:]
     fullHand.append(app.lastDiscardedTile)
     
-    if is_standard_win_with_calls(fullHand) and has_player_yaku('ron'):
+    if is_valid_win_hand(fullHand) and has_player_yaku('ron'):
         app.actionOptions = ['Ron', 'Pass']
         app.actionPromptOpen = True
 
@@ -861,10 +989,10 @@ def start_with_custom_hand(playerHand):
     
     # Deal hands for other players
     players = [
-        {'hand': playerHand[:], 'discards': [], 'calls': [], 'isMenzenchin': True},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True}
+        {'hand': playerHand[:], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
+        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False}
     ]
     
     # Deal to other players
@@ -1194,6 +1322,18 @@ def update_room_interaction_state():
         playerTop <= handSelectTableBottom
     )
 
+    tutorialNpcLeft = app.tutorialNpcX - app.tutorialNpcSize / 2 - rangePadding
+    tutorialNpcRight = app.tutorialNpcX + app.tutorialNpcSize / 2 + rangePadding
+    tutorialNpcTop = app.tutorialNpcY - app.tutorialNpcSize / 2 - rangePadding
+    tutorialNpcBottom = app.tutorialNpcY + app.tutorialNpcSize / 2 + rangePadding
+
+    app.playerNearTutorialNpc = (
+        playerRight >= tutorialNpcLeft and
+        playerLeft <= tutorialNpcRight and
+        playerBottom >= tutorialNpcTop and
+        playerTop <= tutorialNpcBottom
+    )
+
 def draw_room_scene():
     app.scene.add(Rect(0, 0, 400, 400, fill=rgb(84, 62, 44)))
     app.scene.add(Rect(20, 20, 360, 360, fill=rgb(132, 94, 66)))
@@ -1216,12 +1356,21 @@ def draw_room_scene():
                         app.handSelectTableY + app.handSelectTableH / 2,
                         size=12, fill='white', bold=True))
 
-    # player
+    # tutorial npc
+    app.scene.add(Rect(app.tutorialNpcX - app.tutorialNpcSize / 2,
+                       app.tutorialNpcY - app.tutorialNpcSize / 2,
+                       app.tutorialNpcSize,
+                       app.tutorialNpcSize,
+                       fill='lightBlue', border='navy', borderWidth=2))
+    app.scene.add(Label('?', app.tutorialNpcX, app.tutorialNpcY + 1, size=16, fill='navy', bold=True))
+
     app.scene.add(Rect(app.playerX - app.playerSize / 2,
                        app.playerY - app.playerSize / 2,
                        app.playerSize,
                        app.playerSize,
                        fill='gold', border='black'))
+
+    app.scene.add(Label('Tutorial NPC', 55, 354, size=11, fill='white', bold=True))
 
     app.scene.add(Label('WASD to move', 75, 370, size=12, fill='white'))
     app.scene.add(Label('Walk to a table', 200, 370, size=12, fill='white'))
@@ -1232,6 +1381,9 @@ def draw_room_scene():
     if app.playerNearHandSelectTable:
         app.scene.add(Label('Press E to choose starting hand', 200, 90, size=14, fill='yellow', bold=True))
 
+    if app.playerNearTutorialNpc:
+        app.scene.add(Label('Press E to open tutorial', 200, 90, size=14, fill='yellow', bold=True))
+
 def draw_mahjong_scene():
     app.scene.clear()
     app.clickTargets = []
@@ -1240,17 +1392,6 @@ def draw_mahjong_scene():
     
     app.scene.add(Rect(110, 110, 180, 180, fill=rgb(45, 140, 85), border=rgb(20, 90, 50)))
     #app.scene.add(Label('Center Table Space', 200, 200, size=16, fill='white', bold=True))
-    
-    app.scene.add(Rect(10, 10, 70, 35, fill='lightBlue', border='blue', borderWidth=2))
-    app.scene.add(Label('Tutorial', 45, 27, size=12, fill='darkBlue', bold=True))
-    
-    app.clickTargets.append({
-        'type': 'tutorialOpen',
-        'x': 10,
-        'y': 10,
-        'w': 70,
-        'h': 35
-        })
     
     # discard history button ADD IN FUTURE
     #app.scene.add(Rect(10, 10, 60, 35, fill='lightBlue', border='blue', borderWidth=2))
@@ -1297,37 +1438,54 @@ def draw_mahjong_scene():
     
     #app.scene.add(Rect(app.HandX - 4, HandY - 4, app.TotalHandWidth + 8, TileHeight + 8, fill=None, border='gold', borderWidth=1))
     app.scene.add(Label('Player Hand', 200, HandY - 12, size=12, fill='white', bold=True))
+
+    legalRiichiDiscardIndices = []
+    if app.players[0]['riichiDeclared']:
+        legalRiichiDiscardIndices = get_riichi_legal_discard_indices()
+        legalRiichiDiscardIndexSet = set(legalRiichiDiscardIndices)
+    else:
+        legalRiichiDiscardIndexSet = None
     
     for i in range(len(app.hand)):
         TileX = app.HandX + i * (TileWidth + TileGap)
-        draw_tile(TileX, HandY, app.hand[i])
+        isLegalDiscard = True
+        if legalRiichiDiscardIndexSet != None:
+            isLegalDiscard = i in legalRiichiDiscardIndexSet
 
-        app.clickTargets.append({
-            'type': 'hand',
-            'index': i,
-            'tile': app.hand[i],
-            'x': TileX,
-            'y': HandY,
-            'w': TileWidth,
-            'h': TileHeight
-        })
+        draw_tile(TileX, HandY, app.hand[i], dimmed=isLegalDiscard == False)
+
+        if isLegalDiscard:
+            app.clickTargets.append({
+                'type': 'hand',
+                'index': i,
+                'tile': app.hand[i],
+                'x': TileX,
+                'y': HandY,
+                'w': TileWidth,
+                'h': TileHeight
+            })
 
         if app.selectedHandIndex == i:
             draw_selected_outline(TileX, HandY)
         
     if app.drawnTile != None:
         drawnTileX = app.HandX + len(app.hand) * (TileWidth + TileGap) + 12
-        draw_tile(drawnTileX, HandY, app.drawnTile)
+        drawnTileIsLegal = True
+        if legalRiichiDiscardIndexSet != None:
+            drawnTileIsLegal = len(app.hand) in legalRiichiDiscardIndexSet
+
+        draw_tile(drawnTileX, HandY, app.drawnTile, dimmed=drawnTileIsLegal == False)
         
-        app.clickTargets.append({
-            'type': 'drawnTile',
-            'index': len(app.hand),
-            'tile': app.drawnTile,
-            'x': drawnTileX,
-            'y': HandY,
-            'w': TileWidth,
-            'h': TileHeight
-            })
+        if drawnTileIsLegal:
+            app.clickTargets.append({
+                'type': 'drawnTile',
+                'index': len(app.hand),
+                'tile': app.drawnTile,
+                'x': drawnTileX,
+                'y': HandY,
+                'w': TileWidth,
+                'h': TileHeight
+                })
             
     if app.selectedHandIndex == len(app.hand):
         draw_selected_outline(drawnTileX, HandY)
@@ -1397,6 +1555,11 @@ def start_ai_turns():
 def discard_selected_tile():
     if app.selectedHandIndex == None:
         return
+
+    if app.players[0]['riichiDeclared']:
+        legalRiichiDiscardIndices = get_riichi_legal_discard_indices()
+        if app.selectedHandIndex not in legalRiichiDiscardIndices:
+            return
     
     if app.selectedHandIndex == len(app.hand) and app.drawnTile != None:
         discardedTile = app.drawnTile
@@ -1484,6 +1647,9 @@ def get_player_chi_options(tile, discarderIndex):
     
 def get_player_open_call_actions(tile, discarderIndex):
     actions = []
+
+    if app.players[0]['riichiDeclared']:
+        return actions
     
     if can_player_pon(tile):
         actions.append('Pon')
@@ -1701,6 +1867,13 @@ def handle_action_button(action):
     elif action == 'Kan':
         resolve_player_open_kan()
         app.gameMessage = 'KAN'
+
+    elif action == 'Riichi':
+        app.players[0]['riichiDeclared'] = True
+        app.gameMessage = 'RIICHI'
+        app.actionPromptOpen = False
+        app.actionOptions = []
+        app.selectedHandIndex = None
         
     elif action == 'Pass':
         app.actionPromptOpen = False
@@ -1824,7 +1997,12 @@ def onKeyPress(key):
         elif key == 'd':
             app.moveRight = True
         elif key == 'e':
-            if app.playerNearTable:
+            if app.playerNearTutorialNpc:
+                app.currentScene = 'mahjong'
+                app.tutorialOpen = True
+                app.tutorialPage = 0
+                redraw_game()
+            elif app.playerNearTable:
                 app.currentScene = 'mahjong'
                 redraw_game()
             elif app.playerNearHandSelectTable:
@@ -1914,6 +2092,8 @@ def onMousePress(mouseX, mouseY):
             if point_in_rect(mouseX, mouseY, target['x'], target['y'], target['w'], target['h']):
                 if target['type'] == 'tutorialBack':
                     app.tutorialOpen = False
+                    app.tutorialPage = 0
+                    app.currentScene = 'room'
                 elif target['type'] == 'tutorialPrev':
                     app.tutorialPage -= 1
                 elif target['type'] == 'tutorialNext':
@@ -1946,13 +2126,7 @@ def onMousePress(mouseX, mouseY):
     
     for target in app.clickTargets:
         if point_in_rect(mouseX, mouseY, target['x'], target['y'], target['w'], target['h']):
-            if target['type'] == 'tutorialOpen':
-                app.tutorialOpen = True
-                app.tutorialPage = 0
-                redraw_game()
-                return
-            
-            elif target['type'] == 'hand' or target['type'] == 'drawnTile':
+            if target['type'] == 'hand' or target['type'] == 'drawnTile':
                 clickedIndex = target['index']
                                 
                 if app.selectedHandIndex == clickedIndex:
@@ -1971,10 +2145,10 @@ def onMousePress(mouseX, mouseY):
 redraw_game()
     
 cmu_graphics.run()
-    
 
-    
-    
-    
-    
+
+
+
+
+
 
