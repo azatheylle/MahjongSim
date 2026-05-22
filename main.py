@@ -40,6 +40,9 @@ app.resultButtonTarget = None
 app.tutorialOpen = False
 app.tutorialPage = 0
 app.tutorialButtonTargets = []
+app.doraIndicators = []
+app.doraTiles = []
+app.revealedDoraCount = 1
 
 app.currentScene = 'room'
 
@@ -129,6 +132,56 @@ def tile_sort_key(tile):
 
 def sort_hand(hand):
     hand.sort(key=tile_sort_key)
+
+def get_next_dora_tile(indicatorTile):
+    if indicatorTile in HonorOrder:
+        if indicatorTile == 'E':
+            return 'S'
+        elif indicatorTile == 'S':
+            return 'W'
+        elif indicatorTile == 'W':
+            return 'N'
+        elif indicatorTile == 'N':
+            return 'E'
+        elif indicatorTile == 'Wh':
+            return 'G'
+        elif indicatorTile == 'G':
+            return 'R'
+        elif indicatorTile == 'R':
+            return 'Wh'
+
+    number = int(indicatorTile[0])
+    suit = indicatorTile[1]
+    nextNumber = number + 1
+    if nextNumber > 9:
+        nextNumber = 1
+    return str(nextNumber) + suit
+
+def initialize_dora_state():
+    app.doraIndicators = []
+    for i in range(4):
+        app.doraIndicators.append(random.choice(TileNamesByIndex))
+
+    app.doraTiles = []
+    for indicatorTile in app.doraIndicators:
+        app.doraTiles.append(get_next_dora_tile(indicatorTile))
+
+    app.revealedDoraCount = 1
+
+def reveal_next_dora_indicator():
+    if app.revealedDoraCount < len(app.doraIndicators):
+        app.revealedDoraCount += 1
+
+def get_dora_tiles_for_scoring():
+    # Reminder for future scoring work: riichi win scoring uses all predetermined dora,
+    # including those whose indicators are still hidden on the table.
+    return app.doraTiles[:]
+
+def get_revealed_dora_tiles():
+    return app.doraTiles[:app.revealedDoraCount]
+
+def tile_is_revealed_dora(tile):
+    return tile in get_revealed_dora_tiles()
     
 def reset_round_state():
     app.currentPlayer = 0
@@ -157,6 +210,9 @@ def reset_round_state():
     app.tutorialOpen = False
     app.tutorialPage = 0
     app.tutorialButtonTargets = []
+    app.doraIndicators = []
+    app.doraTiles = []
+    app.revealedDoraCount = 1
     
 def deal_starting_hands():
     newWall = build_wall()
@@ -219,6 +275,7 @@ def validate_and_parse_hand(inputStr):
 
 app.players, app.wall = deal_starting_hands()
 app.hand = app.players[0]['hand']
+initialize_dora_state()
 
 # total width of 14 tiles with gaps
 app.TotalHandWidth = len(app.hand) * TileWidth + (len(app.hand) - 1) * TileGap 
@@ -230,10 +287,19 @@ app.clickTargets = []
 app.scene = Group()
 app.noYakuWarning = ''
 
+def draw_dora_shine(x, y, w, h, rotateAngle=0):
+    # Stronger shine so Dora is clearly visible in hand, board mini tiles, and preview.
+    app.scene.add(Rect(x + 1, y + 1, w - 2, h - 2, fill=rgb(255, 238, 150), opacity=22, rotateAngle=rotateAngle))
+    app.scene.add(Rect(x + 1, y + 1, w - 2, h - 2, fill=None, border=rgb(255, 205, 60), borderWidth=2, opacity=60, rotateAngle=rotateAngle))
+    app.scene.add(Circle(x + w * 0.23, y + h * 0.2, max(1.5, w * 0.06), fill='white', opacity=75, rotateAngle=rotateAngle))
 
-def draw_tile_base(x, y):
-        app.scene.add(Rect(x, y, TileWidth, TileHeight, fill='ivory', border='black', borderWidth=1))
-        app.scene.add(Rect(x + 1, y + 1, TileWidth - 2, TileHeight - 2, fill=rgb(248, 244, 232), opacity=40))
+
+def draw_tile_base(x, y, isDora=False):
+    app.scene.add(Rect(x, y, TileWidth, TileHeight, fill='white', border='black', borderWidth=1))
+    if isDora:
+        draw_dora_shine(x, y, TileWidth, TileHeight)
+    else:
+        app.scene.add(Rect(x + 1, y + 1, TileWidth - 2, TileHeight - 2, fill=rgb(245, 240, 225), opacity=35))
             
             
 def draw_center_text(x, y, text, size=11, color='black', bold=False):
@@ -273,7 +339,7 @@ def draw_honor(x, y, tile):
             
             
 def draw_tile(x, y, tile, dimmed=False):
-    draw_tile_base(x, y)
+    draw_tile_base(x, y, isDora=tile_is_revealed_dora(tile))
         
     if tile in HonorOrder:
         draw_honor(x, y, tile)
@@ -301,12 +367,15 @@ def draw_preview_panel():
     if app.previewTile != None:
         previewX = 331
         previewY = 6
+        tile = app.previewTile
+        isDora = tile_is_revealed_dora(tile)
         
         # big boy tile
-        app.scene.add(Rect(previewX, previewY, 63, 93, fill='ivory', border='black', borderWidth=1))
-        app.scene.add(Rect(previewX + 1, previewY + 1, 61, 91, fill=rgb(248, 244, 232), opacity=40))
-        
-        tile = app.previewTile
+        app.scene.add(Rect(previewX, previewY, 63, 93, fill='white', border='black', borderWidth=1))
+        if isDora:
+            draw_dora_shine(previewX, previewY, 63, 93)
+        else:
+            app.scene.add(Rect(previewX + 1, previewY + 1, 61, 91, fill=rgb(248, 244, 232), opacity=40))
         
 
         if tile in HonorOrder:
@@ -338,9 +407,15 @@ def draw_preview_panel():
             elif suit == 's':
                 app.scene.add(Label(str(number), previewX + 31, previewY + 26, size=26, fill='green', bold=True))
                 app.scene.add(Label('S', previewX + 31, previewY + 63, size=30, fill='green', bold=True))
+
                         
-def draw_mini_tile(x, y, tile, rotateAngle=0):
-    app.scene.add(Rect(x, y, 20, 30, fill='ivory', border='black', borderWidth=1, rotateAngle=rotateAngle))
+def draw_mini_tile(x, y, tile, rotateAngle=0, highlightDoraBackground=True):
+    isDora = highlightDoraBackground and tile_is_revealed_dora(tile)
+    app.scene.add(Rect(x, y, 20, 30, fill='white', border='black', borderWidth=1, rotateAngle=rotateAngle))
+    if isDora:
+        draw_dora_shine(x, y, 20, 30, rotateAngle=rotateAngle)
+    else:
+        app.scene.add(Rect(x + 1, y + 1, 18, 28, fill=rgb(248, 244, 232), opacity=40, rotateAngle=rotateAngle))
           
     if tile in HonorOrder:
         color = 'black'
@@ -348,7 +423,7 @@ def draw_mini_tile(x, y, tile, rotateAngle=0):
             color = 'green'
         elif tile == 'R':
             color = 'red'
-        
+
         app.scene.add(Label(tile, x + 10, y + 15, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
     else:
         number = tile[0]
@@ -362,10 +437,19 @@ def draw_mini_tile(x, y, tile, rotateAngle=0):
             color = 'blue'
         elif suit == 's':
             color = 'green'
-                    
-        app.scene.add(Label(number, x + 10, y + 9, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
-        app.scene.add(Label(suitLetter, x + 10, y + 21, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
-        
+
+        if rotateAngle == 90:
+            # Left seat POV: number should be center-facing, suit/player color edge-facing.
+            app.scene.add(Label(number, x + 15, y + 15, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
+            app.scene.add(Label(suitLetter, x + 5, y + 15, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
+        elif rotateAngle == -90:
+            # Right seat POV: mirror so number remains center-facing.
+            app.scene.add(Label(number, x + 5, y + 15, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
+            app.scene.add(Label(suitLetter, x + 15, y + 15, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
+        else:
+            app.scene.add(Label(number, x + 10, y + 9, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
+            app.scene.add(Label(suitLetter, x + 10, y + 21, size=10, fill=color, bold=True, rotateAngle=rotateAngle))
+
 def draw_player_calls():
     startRightX = 395
     y = 365
@@ -386,6 +470,27 @@ def draw_player_calls():
             draw_mini_tile(x, y, tiles[i])
             
         currentRightX = startX - setGap
+
+def draw_dora_indicator_panel():
+    panelX = 8
+    panelY = 8
+    panelW = 110
+    panelH = 54
+    slotStartX = panelX + 8
+    slotY = panelY + 16
+    slotGap = 24
+
+    app.scene.add(Rect(panelX, panelY, panelW, panelH, fill=rgb(25, 90, 55), border='white', borderWidth=1))
+    app.scene.add(Label('Dora', panelX + panelW / 2, panelY + 10, size=10, fill='white', bold=True))
+
+    for i in range(4):
+        slotX = slotStartX + i * slotGap
+
+        if i < app.revealedDoraCount and i < len(app.doraIndicators):
+            draw_mini_tile(slotX, slotY, app.doraIndicators[i], highlightDoraBackground=False)
+        else:
+            app.scene.add(Rect(slotX, slotY, 20, 30, fill=rgb(50, 70, 90), border='black', borderWidth=1))
+            app.scene.add(Rect(slotX + 3, slotY + 3, 14, 24, fill=rgb(85, 105, 125), opacity=65))
 
 def draw_recent_discards():
     # top player (player 2)
@@ -477,17 +582,17 @@ def draw_recent_discards():
         tile = rightDiscards[-1]
         x = 255
         y = 216
-        draw_mini_tile(x, y, tile, rotateAngle=90)
+        draw_mini_tile(x, y, tile, rotateAngle=-90)
         app.clickTargets.append({'type': 'discardPreview', 'tile': tile, 'x': x, 'y': y, 'w': 20, 'h': 30})
         
     elif len(rightDiscards) == 2:
         newestTile = rightDiscards[-1]
         olderTile = rightDiscards[-2]
         
-        draw_mini_tile(255, 216, newestTile, rotateAngle=90)
+        draw_mini_tile(255, 216, newestTile, rotateAngle=-90)
         app.clickTargets.append({'type': 'discardPreview', 'tile': newestTile, 'x': 255, 'y': 216, 'w': 20, 'h': 30})
         
-        draw_mini_tile(255, 192, olderTile, rotateAngle=90)
+        draw_mini_tile(255, 192, olderTile, rotateAngle=-90)
         app.clickTargets.append({'type': 'discardPreview', 'tile': olderTile, 'x': 255, 'y': 192, 'w': 20, 'h': 30})
         
     else:
@@ -497,13 +602,13 @@ def draw_recent_discards():
         middleTile = visibleRightDiscards[-2]
         oldestTile = visibleRightDiscards[-3]
         
-        draw_mini_tile(255, 216, newestTile, rotateAngle=90)
+        draw_mini_tile(255, 216, newestTile, rotateAngle=-90)
         app.clickTargets.append({'type': 'discardPreview', 'tile': newestTile, 'x': 255, 'y': 216, 'w': 20, 'h': 30})
         
-        draw_mini_tile(255, 192, middleTile, rotateAngle=90)
+        draw_mini_tile(255, 192, middleTile, rotateAngle=-90)
         app.clickTargets.append({'type': 'discardPreview', 'tile': middleTile, 'x': 255, 'y': 192, 'w': 20, 'h': 30})
         
-        draw_mini_tile(255, 168, oldestTile, rotateAngle=90)
+        draw_mini_tile(255, 168, oldestTile, rotateAngle=-90)
         app.clickTargets.append({'type': 'discardPreview', 'tile': oldestTile, 'x': 255, 'y': 168, 'w': 20, 'h': 30})
         
     # bottom player (player 0)
@@ -967,6 +1072,7 @@ def start_new_hand():
     reset_round_state()
     app.players, app.wall = deal_starting_hands()
     app.hand = app.players[0]['hand']
+    initialize_dora_state()
     
     app.TotalHandWidth = len(app.hand) * TileWidth + (len(app.hand) - 1) * TileGap
     app.HandX = (400 - app.TotalHandWidth) / 2
@@ -1005,6 +1111,7 @@ def start_with_custom_hand(playerHand):
     app.players = players
     app.wall = newWall
     app.hand = app.players[0]['hand']
+    initialize_dora_state()
     
     app.TotalHandWidth = len(app.hand) * TileWidth + (len(app.hand) - 1) * TileGap
     app.HandX = (400 - app.TotalHandWidth) / 2
@@ -1398,6 +1505,7 @@ def draw_mahjong_scene():
     #app.scene.add(Label('Discards', 40, 27, size=12, fill='darkBlue', bold=True))
     
     app.scene.add(Label('Riichi Mahjong', 200, 25, size=18, fill='white', bold=True))
+    draw_dora_indicator_panel()
     #app.scene.add(Label(f'Tile size: {TileWidth}x{TileHeight}', 200, 45, size=12, fill='white'))
     #app.scene.add(Label(f'Total hand width: {int(app.TotalHandWidth)} px', 200, 60, size=12, fill='white'))
     app.scene.add(Label(f'Wall tiles left: {len(app.wall)}', 200, 45, size=12, fill='white'))
@@ -1757,6 +1865,7 @@ def resolve_player_closed_kan(tile):
     app.selectedHandIndex = None
     app.previewTile = tile
     sort_hand(app.hand)
+    reveal_next_dora_indicator()
     
     # Draw a replacement tile
     draw_tile_for_player()
@@ -1788,6 +1897,7 @@ def resolve_player_open_kan():
     app.selectedHandIndex = None
     app.previewTile = tile
     sort_hand(app.hand)
+    reveal_next_dora_indicator()
     
     app.pendingKanTile = None
     app.pendingKanType = None
