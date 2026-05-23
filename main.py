@@ -35,6 +35,9 @@ app.pendingKanTile = None
 app.pendingKanType = None
 app.roundResult = None
 app.roundResultReason = ''
+app.roundScoreText = ''
+app.roundYakuLines = []
+app.roundWinnerIndex = None
 app.noYakuWarning = ''
 app.resultButtonTarget = None
 app.tutorialOpen = False
@@ -43,6 +46,11 @@ app.tutorialButtonTargets = []
 app.doraIndicators = []
 app.doraTiles = []
 app.revealedDoraCount = 1
+app.mainPlayerIndex = 0
+app.dealerIndex = 0
+app.roundWind = 'E'
+app.openTanyaoEnabled = True
+app.kazoeYakumanEnabled = True
 
 app.currentScene = 'room'
 
@@ -96,6 +104,9 @@ HandY = 400 - 52
 
 SuitOrder = {'m': 0, 'p': 1, 's': 2}
 HonorOrder = {'E': 0, 'S': 1, 'W': 2, 'N': 3, 'Wh': 4, 'G': 5, 'R': 6}
+WindOrder = ['E', 'S', 'W', 'N']
+DragonTiles = {'Wh', 'G', 'R'}
+GreenTiles = {'2s', '3s', '4s', '6s', '8s', 'G'}
 
 ThirteenOrphansTiles = {
     '1m', '9m',
@@ -205,6 +216,9 @@ def reset_round_state():
     app.pendingKanType = None
     app.roundResult = None
     app.roundResultReason = ''
+    app.roundScoreText = ''
+    app.roundYakuLines = []
+    app.roundWinnerIndex = None
     app.noYakuWarning = ''
     app.resultButtonTarget = None
     app.tutorialOpen = False
@@ -220,10 +234,10 @@ def deal_starting_hands():
         
 
     players = [
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False}
+        {'hand': [], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None},
+        {'hand': [], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None},
+        {'hand': [], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None},
+        {'hand': [], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None}
     ]
 
     for roundNumber in range(13):
@@ -274,7 +288,7 @@ def validate_and_parse_hand(inputStr):
     return tiles, None
 
 app.players, app.wall = deal_starting_hands()
-app.hand = app.players[0]['hand']
+app.hand = app.players[app.mainPlayerIndex]['hand']
 initialize_dora_state()
 
 # total width of 14 tiles with gaps
@@ -692,8 +706,8 @@ def can_form_melds(counts):
                     
     return False
     
-def get_player_call_meld_count():
-    return len(app.players[0]['calls'])
+def get_player_call_meld_count(playerIndex=0):
+    return len(app.players[playerIndex]['calls'])
 
 def is_seven_pairs(hand):
     if len(hand) != 14:
@@ -741,11 +755,14 @@ def is_thirteen_orphans(hand):
 
     return True
 
-def is_valid_win_hand(hand):
-    return is_standard_win_with_calls(hand) or is_seven_pairs(hand) or is_thirteen_orphans(hand)
+def is_valid_win_hand(hand, playerIndex=0):
+    return is_standard_win_with_calls(hand, playerIndex) or is_seven_pairs(hand) or is_thirteen_orphans(hand)
 
-def hand_is_tenpai_for_riichi(hand):
-    if app.players[0]['calls']:
+def hand_is_tenpai_for_riichi(hand, playerIndex=None):
+    if playerIndex == None:
+        playerIndex = app.mainPlayerIndex
+
+    if player_hand_is_closed(playerIndex) == False:
         return False
 
     if len(hand) != 14:
@@ -834,8 +851,8 @@ def can_form_partial_melds(counts, meldsNeeded):
     
     return False
 
-def is_standard_win_with_calls(concealedTiles):
-    totalMeldsNeededFromHand = 4 - get_player_call_meld_count()
+def is_standard_win_with_calls(concealedTiles, playerIndex=0):
+    totalMeldsNeededFromHand = 4 - get_player_call_meld_count(playerIndex)
     
     if totalMeldsNeededFromHand < 0:
         return False
@@ -874,53 +891,830 @@ def is_standard_win(hand):
 
 def hand_has_triplet(hand, tile):
     return hand.count(tile) >= 3
-    
-    
-def get_all_tiles_for_yaku_check(winType):
-    fullHand = app.hand[:]
-    
+
+def is_honor(tile):
+    return tile in HonorOrder
+
+def is_terminal(tile):
+    if tile in HonorOrder:
+        return False
+    return tile[0] == '1' or tile[0] == '9'
+
+def is_terminal_or_honor(tile):
+    return is_honor(tile) or is_terminal(tile)
+
+def is_simple_tile(tile):
+    return is_terminal_or_honor(tile) == False
+
+def get_tile_suit(tile):
+    if tile in HonorOrder:
+        return None
+    return tile[1]
+
+def get_tile_number(tile):
+    if tile in HonorOrder:
+        return None
+    return int(tile[0])
+
+def get_player_hand_tiles(playerIndex):
+    if playerIndex == app.mainPlayerIndex:
+        return app.hand[:]
+    return app.players[playerIndex]['hand'][:]
+
+def get_player_last_drawn_tile(playerIndex):
+    if playerIndex == app.mainPlayerIndex and app.drawnTile != None:
+        return app.drawnTile
+    return app.players[playerIndex].get('lastDrawnTile')
+
+def get_player_seat_wind(playerIndex):
+    return WindOrder[(playerIndex - app.dealerIndex) % 4]
+
+def get_player_display_name(playerIndex):
+    if playerIndex == app.mainPlayerIndex:
+        return 'You'
+    if playerIndex == 1:
+        return 'Left AI'
+    if playerIndex == 2:
+        return 'Top AI'
+    if playerIndex == 3:
+        return 'Right AI'
+    return 'Player ' + str(playerIndex + 1)
+
+def get_hand_closed_state(playerIndex):
+    for call in app.players[playerIndex]['calls']:
+        if call['from'] != -1:
+            return False
+    return True
+
+def player_hand_is_closed(playerIndex):
+    return get_hand_closed_state(playerIndex)
+
+def get_call_melds(playerIndex):
+    melds = []
+    for call in app.players[playerIndex]['calls']:
+        meldType = 'sequence'
+        if call['type'] == 'Pon':
+            meldType = 'triplet'
+        elif call['type'] == 'Kan':
+            meldType = 'kan'
+
+        melds.append({
+            'type': meldType,
+            'tiles': call['tiles'][:],
+            'open': call['from'] != -1,
+            'fromCall': True
+        })
+    return melds
+
+def get_default_winning_tile(winType, playerIndex, winningTile=None):
+    if winningTile != None:
+        return winningTile
+
     if winType == 'tsumo':
-        if app.drawnTile != None:
-            fullHand.append(app.drawnTile)
-    elif winType == 'ron':
-        if app.lastDiscardedTile != None:
-            fullHand.append(app.lastDiscardedTile)
-            
-    for call in app.players[0]['calls']:
+        return get_player_last_drawn_tile(playerIndex)
+    if winType == 'ron':
+        return app.lastDiscardedTile
+
+    return None
+
+def get_all_tiles_for_yaku_check(winType, playerIndex=0, winningTile=None):
+    fullHand = get_player_hand_tiles(playerIndex)
+
+    winningTile = get_default_winning_tile(winType, playerIndex, winningTile)
+
+    if winningTile != None:
+        fullHand.append(winningTile)
+
+    for call in app.players[playerIndex]['calls']:
         for tile in call['tiles']:
             fullHand.append(tile)
-            
+
     return fullHand
-            
-            
-def has_player_yaku(winType):
-    fullTiles = get_all_tiles_for_yaku_check(winType)
 
-    if app.players[0]['riichiDeclared']:
-        return True
-    
-    if app.players[0]['isMenzenchin'] and winType == 'tsumo':
-        return True
+def get_concealed_tiles_for_scoring(winType, playerIndex=0, winningTile=None):
+    concealedTiles = get_player_hand_tiles(playerIndex)
 
-    if is_seven_pairs(fullTiles):
+    winningTile = get_default_winning_tile(winType, playerIndex, winningTile)
+
+    if winningTile != None:
+        concealedTiles.append(winningTile)
+
+    return concealedTiles
+
+def get_meld_base_tile(meld):
+    tiles = meld['tiles'][:]
+    sort_hand(tiles)
+    return tiles[0]
+
+def count_tile_occurrences(tiles):
+    tileCounts = {}
+    for tile in tiles:
+        tileCounts[tile] = tileCounts.get(tile, 0) + 1
+    return tileCounts
+
+def build_standard_decompositions_from_counts(counts, meldsNeeded, currentMelds, pairTile, results):
+    firstIndex = -1
+    for i in range(34):
+        if counts[i] > 0:
+            firstIndex = i
+            break
+
+    if firstIndex == -1:
+        if len(currentMelds) == meldsNeeded:
+            results.append({'pairTile': pairTile, 'melds': currentMelds[:]})
+        return
+
+    if len(currentMelds) >= meldsNeeded:
+        return
+
+    tile = TileNamesByIndex[firstIndex]
+
+    if counts[firstIndex] >= 3:
+        counts[firstIndex] -= 3
+        currentMelds.append({
+            'type': 'triplet',
+            'tiles': [tile, tile, tile],
+            'open': False,
+            'fromCall': False
+        })
+        build_standard_decompositions_from_counts(counts, meldsNeeded, currentMelds, pairTile, results)
+        currentMelds.pop()
+        counts[firstIndex] += 3
+
+    if firstIndex <= 26:
+        suitStart = (firstIndex // 9) * 9
+        suitOffset = firstIndex - suitStart
+        if suitOffset <= 6 and counts[firstIndex + 1] > 0 and counts[firstIndex + 2] > 0:
+            tile2 = TileNamesByIndex[firstIndex + 1]
+            tile3 = TileNamesByIndex[firstIndex + 2]
+            counts[firstIndex] -= 1
+            counts[firstIndex + 1] -= 1
+            counts[firstIndex + 2] -= 1
+            currentMelds.append({
+                'type': 'sequence',
+                'tiles': [tile, tile2, tile3],
+                'open': False,
+                'fromCall': False
+            })
+            build_standard_decompositions_from_counts(counts, meldsNeeded, currentMelds, pairTile, results)
+            currentMelds.pop()
+            counts[firstIndex] += 1
+            counts[firstIndex + 1] += 1
+            counts[firstIndex + 2] += 1
+
+def get_standard_hand_decompositions(concealedTiles, playerIndex=0):
+    meldsNeeded = 4 - len(app.players[playerIndex]['calls'])
+    expectedTileCount = meldsNeeded * 3 + 2
+    if len(concealedTiles) != expectedTileCount:
+        return []
+
+    counts = build_tile_counts(concealedTiles)
+    results = []
+
+    for i in range(34):
+        if counts[i] >= 2:
+            counts[i] -= 2
+            build_standard_decompositions_from_counts(counts, meldsNeeded, [], TileNamesByIndex[i], results)
+            counts[i] += 2
+
+    return results
+
+def meld_contains_terminal_or_honor(meld):
+    for tile in meld['tiles']:
+        if is_terminal_or_honor(tile):
+            return True
+    return False
+
+def meld_is_terminal_sequence(meld):
+    if meld['type'] != 'sequence':
+        return False
+    numbers = [get_tile_number(tile) for tile in meld['tiles']]
+    return min(numbers) == 1 or max(numbers) == 9
+
+def is_value_pair(tile, seatWind, roundWind):
+    if tile in DragonTiles:
         return True
+    if tile == seatWind:
+        return True
+    if tile == roundWind:
+        return True
+    return False
+
+def get_wait_fu(standardResult, winningTile):
+    if winningTile == None:
+        return 0
+
+    possibleFu = [0]
+
+    if standardResult['pairTile'] == winningTile:
+        possibleFu.append(2)
+
+    for meld in standardResult['melds']:
+        if meld['type'] != 'sequence':
+            continue
+        if meld['tiles'].count(winningTile) == 0:
+            continue
+
+        numbers = [get_tile_number(tile) for tile in meld['tiles']]
+        smallest = min(numbers)
+        if numbers[1] == get_tile_number(winningTile):
+            possibleFu.append(2)
+        elif smallest == 1 and get_tile_number(winningTile) == 3:
+            possibleFu.append(2)
+        elif smallest == 7 and get_tile_number(winningTile) == 7:
+            possibleFu.append(2)
+        else:
+            possibleFu.append(0)
+
+    return max(possibleFu)
+
+def is_all_simples(tiles):
+    for tile in tiles:
+        if is_simple_tile(tile) == False:
+            return False
+    return True
+
+def is_half_flush(tiles):
+    suits = set()
+    hasHonor = False
+    for tile in tiles:
+        if is_honor(tile):
+            hasHonor = True
+        else:
+            suits.add(get_tile_suit(tile))
+    return len(suits) == 1 and hasHonor
+
+def is_full_flush(tiles):
+    suits = set()
+    for tile in tiles:
+        if is_honor(tile):
+            return False
+        suits.add(get_tile_suit(tile))
+    return len(suits) == 1
+
+def is_all_honors(tiles):
+    for tile in tiles:
+        if is_honor(tile) == False:
+            return False
+    return True
+
+def is_all_terminals(tiles):
+    for tile in tiles:
+        if is_terminal(tile) == False:
+            return False
+    return True
+
+def is_all_green(tiles):
+    for tile in tiles:
+        if tile not in GreenTiles:
+            return False
+    return True
+
+def is_nine_gates(tiles):
+    if len(tiles) != 14:
+        return False
+    if is_full_flush(tiles) == False:
+        return False
+
+    suit = get_tile_suit(tiles[0])
+    countsByNumber = {i: 0 for i in range(1, 10)}
+    for tile in tiles:
+        if get_tile_suit(tile) != suit:
+            return False
+        countsByNumber[get_tile_number(tile)] += 1
+
+    if countsByNumber[1] < 3 or countsByNumber[9] < 3:
+        return False
+    for number in range(2, 9):
+        if countsByNumber[number] < 1:
+            return False
+
+    return True
+
+def count_dora(tiles):
+    doraCount = 0
+    doraTiles = get_dora_tiles_for_scoring()
+    for tile in tiles:
+        for doraTile in doraTiles:
+            if tile == doraTile:
+                doraCount += 1
+    return doraCount
+
+def add_yaku(yakuList, hanValue, label):
+    yakuList.append({'name': label, 'han': hanValue})
+
+def get_sequence_pattern_counts(melds):
+    patternCounts = {}
+    for meld in melds:
+        if meld['type'] != 'sequence':
+            continue
+        pattern = meld['tiles'][0]
+        patternCounts[pattern] = patternCounts.get(pattern, 0) + 1
+    return patternCounts
+
+def get_triplet_like_tiles(melds):
+    tiles = []
+    for meld in melds:
+        if meld['type'] == 'triplet' or meld['type'] == 'kan':
+            tiles.append(get_meld_base_tile(meld))
+    return tiles
+
+def winning_tile_completes_triplet_on_ron(scoreContext, standardResult):
+    if scoreContext['winType'] != 'ron' or scoreContext['winningTile'] == None or standardResult == None:
+        return False
+
+    if standardResult['pairTile'] == scoreContext['winningTile']:
+        return False
+
+    for meld in standardResult['melds']:
+        if meld['type'] == 'sequence' and scoreContext['winningTile'] in meld['tiles']:
+            return False
+
+    for meld in standardResult['melds']:
+        if (meld['type'] == 'triplet' or meld['type'] == 'kan') and scoreContext['winningTile'] in meld['tiles']:
+            return True
+
+    return False
+
+def count_concealed_triplets(scoreContext, standardResult):
+    concealedTriplets = 0
+
+    for meld in standardResult['melds']:
+        if meld['type'] == 'triplet' or meld['type'] == 'kan':
+            concealedTriplets += 1
+
+    for meld in scoreContext['callMelds']:
+        if meld['type'] == 'kan' and meld['open'] == False:
+            concealedTriplets += 1
+
+    if winning_tile_completes_triplet_on_ron(scoreContext, standardResult):
+        concealedTriplets -= 1
+
+    return concealedTriplets
+
+def evaluate_yakuman(scoreContext, standardResult):
+    fullTiles = scoreContext['fullTiles']
+    allMelds = scoreContext['callMelds'][:]
+    if standardResult != None:
+        allMelds += standardResult['melds']
+
+    yakumanList = []
+    tripletTiles = get_triplet_like_tiles(allMelds)
 
     if is_thirteen_orphans(fullTiles):
-        return True
-        
-    if hand_has_triplet(fullTiles, 'E'):
-        return True
-        
-    if hand_has_triplet(fullTiles, 'Wh'):
-        return True
-    
-    if hand_has_triplet(fullTiles, 'G'):
-        return True
-        
-    if hand_has_triplet(fullTiles, 'R'):
-        return True
-        
-    return False
+        yakumanList.append('Thirteen Orphans')
+
+    if is_all_honors(fullTiles):
+        yakumanList.append('All Honors')
+
+    if is_all_terminals(fullTiles):
+        yakumanList.append('All Terminals')
+
+    if is_all_green(fullTiles):
+        yakumanList.append('All Green')
+
+    dragonTriplets = 0
+    for dragonTile in DragonTiles:
+        if dragonTile in tripletTiles:
+            dragonTriplets += 1
+    if dragonTriplets == 3:
+        yakumanList.append('Big Three Dragons')
+
+    windTriplets = 0
+    windPairCount = 0
+    for windTile in WindOrder:
+        if windTile in tripletTiles:
+            windTriplets += 1
+        elif standardResult != None and standardResult['pairTile'] == windTile:
+            windPairCount += 1
+    if windTriplets == 4:
+        yakumanList.append('Big Four Winds')
+    elif windTriplets == 3 and windPairCount == 1:
+        yakumanList.append('Little Four Winds')
+
+    if len([meld for meld in allMelds if meld['type'] == 'kan']) == 4:
+        yakumanList.append('Four Kans')
+
+    if standardResult != None:
+        concealedTriplets = count_concealed_triplets(scoreContext, standardResult)
+        if concealedTriplets >= 4 and scoreContext['isClosed']:
+            if scoreContext['winType'] == 'tsumo' or standardResult['pairTile'] == scoreContext['winningTile']:
+                yakumanList.append('Four Concealed Triplets')
+
+    if scoreContext['isClosed'] and is_nine_gates(scoreContext['concealedTiles']):
+        yakumanList.append('Nine Gates')
+
+    return yakumanList
+
+def evaluate_standard_yaku(scoreContext, standardResult):
+    yakuList = []
+    fullTiles = scoreContext['fullTiles']
+    seatWind = scoreContext['seatWind']
+    roundWind = scoreContext['roundWind']
+    allMelds = scoreContext['callMelds'][:] + standardResult['melds']
+    concealedSequences = [meld for meld in standardResult['melds'] if meld['type'] == 'sequence']
+    sequencePatternCounts = get_sequence_pattern_counts(concealedSequences)
+    tripletTiles = get_triplet_like_tiles(allMelds)
+    waitFu = get_wait_fu(standardResult, scoreContext['winningTile'])
+
+    if scoreContext['player']['riichiDeclared'] and scoreContext['isClosed']:
+        add_yaku(yakuList, 1, 'Riichi')
+
+    if scoreContext['isClosed'] and scoreContext['winType'] == 'tsumo':
+        add_yaku(yakuList, 1, 'Menzen Tsumo')
+
+    if is_all_simples(fullTiles) and (scoreContext['isClosed'] or app.openTanyaoEnabled):
+        add_yaku(yakuList, 1, 'Tanyao')
+
+    duplicateSequencePairs = 0
+    for pattern, count in sequencePatternCounts.items():
+        duplicateSequencePairs += count // 2
+    if scoreContext['isClosed']:
+        if duplicateSequencePairs >= 2:
+            add_yaku(yakuList, 3, 'Ryanpeikou')
+        elif duplicateSequencePairs >= 1:
+            add_yaku(yakuList, 1, 'Iipeikou')
+
+    if len([meld for meld in allMelds if meld['type'] != 'sequence']) == 0:
+        pairTile = standardResult['pairTile']
+        if is_value_pair(pairTile, seatWind, roundWind) == False and waitFu == 0 and scoreContext['isClosed']:
+            add_yaku(yakuList, 1, 'Pinfu')
+
+    for dragonTile in DragonTiles:
+        if dragonTile in tripletTiles:
+            if dragonTile == 'Wh':
+                add_yaku(yakuList, 1, 'White Dragon')
+            elif dragonTile == 'G':
+                add_yaku(yakuList, 1, 'Green Dragon')
+            elif dragonTile == 'R':
+                add_yaku(yakuList, 1, 'Red Dragon')
+
+    if seatWind in tripletTiles:
+        add_yaku(yakuList, 1, 'Seat Wind')
+    if roundWind in tripletTiles:
+        add_yaku(yakuList, 1, 'Round Wind')
+
+    sequenceStartsBySuit = {'m': set(), 'p': set(), 's': set()}
+    for meld in allMelds:
+        if meld['type'] != 'sequence':
+            continue
+        tile = meld['tiles'][0]
+        sequenceStartsBySuit[get_tile_suit(tile)].add(get_tile_number(tile))
+
+    for suit in ['m', 'p', 's']:
+        if 1 in sequenceStartsBySuit[suit] and 4 in sequenceStartsBySuit[suit] and 7 in sequenceStartsBySuit[suit]:
+            add_yaku(yakuList, 2 if scoreContext['isClosed'] else 1, 'Ittsu')
+            break
+
+    for start in range(1, 8):
+        if start in sequenceStartsBySuit['m'] and start in sequenceStartsBySuit['p'] and start in sequenceStartsBySuit['s']:
+            add_yaku(yakuList, 2 if scoreContext['isClosed'] else 1, 'Sanshoku Doujun')
+            break
+
+    if len([meld for meld in allMelds if meld['type'] == 'sequence']) == 0:
+        add_yaku(yakuList, 2, 'Toitoi')
+
+    concealedTriplets = count_concealed_triplets(scoreContext, standardResult)
+    if concealedTriplets >= 3:
+        add_yaku(yakuList, 2, 'Sanankou')
+
+    if len([meld for meld in allMelds if meld['type'] == 'kan']) >= 3:
+        add_yaku(yakuList, 2, 'Sankantsu')
+
+    everySetHasTerminalOrHonor = meld_contains_terminal_or_honor({'tiles': [standardResult['pairTile'], standardResult['pairTile']], 'type': 'pair'})
+    hasSequence = False
+    hasHonor = is_honor(standardResult['pairTile'])
+    junchanValid = is_terminal(standardResult['pairTile'])
+    for meld in allMelds:
+        if meld_contains_terminal_or_honor(meld) == False:
+            everySetHasTerminalOrHonor = False
+        if meld['type'] == 'sequence':
+            hasSequence = True
+            if meld_is_terminal_sequence(meld) == False:
+                junchanValid = False
+        elif meld_contains_terminal_or_honor(meld) == False:
+            junchanValid = False
+        for tile in meld['tiles']:
+            if is_honor(tile):
+                hasHonor = True
+            if is_terminal(tile) == False:
+                if is_honor(tile) == False:
+                    junchanValid = False
+    if everySetHasTerminalOrHonor and hasSequence:
+        if junchanValid and hasHonor == False:
+            add_yaku(yakuList, 3 if scoreContext['isClosed'] else 2, 'Junchan')
+        else:
+            add_yaku(yakuList, 2 if scoreContext['isClosed'] else 1, 'Chanta')
+
+    if all(is_terminal_or_honor(tile) for tile in fullTiles):
+        add_yaku(yakuList, 2, 'Honroutou')
+
+    dragonTriplets = 0
+    for dragonTile in DragonTiles:
+        if dragonTile in tripletTiles:
+            dragonTriplets += 1
+    if dragonTriplets == 2 and standardResult['pairTile'] in DragonTiles:
+        add_yaku(yakuList, 2, 'Shousangen')
+
+    if is_half_flush(fullTiles):
+        add_yaku(yakuList, 3 if scoreContext['isClosed'] else 2, 'Honitsu')
+    elif is_full_flush(fullTiles):
+        add_yaku(yakuList, 6 if scoreContext['isClosed'] else 5, 'Chinitsu')
+
+    return yakuList
+
+def calculate_standard_fu(scoreContext, standardResult, yakuList):
+    pairTile = standardResult['pairTile']
+    seatWind = scoreContext['seatWind']
+    roundWind = scoreContext['roundWind']
+    allMelds = scoreContext['callMelds'][:] + standardResult['melds']
+    waitFu = get_wait_fu(standardResult, scoreContext['winningTile'])
+    hasPinfu = False
+    for yaku in yakuList:
+        if yaku['name'] == 'Pinfu':
+            hasPinfu = True
+            break
+
+    if hasPinfu and scoreContext['winType'] == 'tsumo':
+        return 20
+
+    fu = 20
+
+    if scoreContext['winType'] == 'ron' and scoreContext['isClosed']:
+        fu += 10
+    elif scoreContext['winType'] == 'tsumo':
+        fu += 2
+
+    if pairTile in DragonTiles:
+        fu += 2
+    if pairTile == seatWind:
+        fu += 2
+    if pairTile == roundWind:
+        fu += 2
+
+    fu += waitFu
+
+    for meld in allMelds:
+        baseTile = meld['tiles'][0]
+        isTerminalMeld = is_terminal_or_honor(baseTile)
+
+        if meld['type'] == 'triplet':
+            if meld['open']:
+                fu += 4 if isTerminalMeld else 2
+            else:
+                fu += 8 if isTerminalMeld else 4
+        elif meld['type'] == 'kan':
+            if meld['open']:
+                fu += 16 if isTerminalMeld else 8
+            else:
+                fu += 32 if isTerminalMeld else 16
+
+    if fu == 20 and scoreContext['winType'] == 'ron' and scoreContext['isClosed'] == False:
+        fu = 30
+
+    if fu % 10 != 0:
+        fu = ((fu // 10) + 1) * 10
+
+    return fu
+
+def calculate_payment_breakdown(basePoints, winType, isDealer):
+    if winType == 'ron':
+        multiplier = 6 if isDealer else 4
+        points = ((basePoints * multiplier + 99) // 100) * 100
+        return {'ron': points, 'total': points}
+
+    if isDealer:
+        eachPayment = ((basePoints * 2 + 99) // 100) * 100
+        return {
+            'dealerPays': eachPayment,
+            'nonDealerPays': eachPayment,
+            'total': eachPayment * 3
+        }
+
+    dealerPays = ((basePoints * 2 + 99) // 100) * 100
+    nonDealerPays = ((basePoints + 99) // 100) * 100
+    return {
+        'dealerPays': dealerPays,
+        'nonDealerPays': nonDealerPays,
+        'total': dealerPays + nonDealerPays * 2
+    }
+
+def get_limit_base_points(han, fu):
+    if han >= 13 and app.kazoeYakumanEnabled:
+        return 8000, 'Kazoe Yakuman'
+    if han >= 11:
+        return 6000, 'Sanbaiman'
+    if han >= 8:
+        return 4000, 'Baiman'
+    if han >= 6:
+        return 3000, 'Haneman'
+    if han >= 5 or (han == 4 and fu >= 40) or (han == 3 and fu >= 70):
+        return 2000, 'Mangan'
+    return None, None
+
+def build_score_details(scoreContext, yakuList, fu, includeDora):
+    normalHan = 0
+    for yaku in yakuList:
+        normalHan += yaku['han']
+
+    doraCount = count_dora(scoreContext['fullTiles']) if includeDora else 0
+    totalHan = normalHan + doraCount
+
+    if normalHan == 0:
+        return {
+            'isValid': False,
+            'han': 0,
+            'fu': fu,
+            'yaku': yakuList,
+            'doraCount': doraCount,
+            'yakuman': [],
+            'payments': None,
+            'limitName': None,
+            'totalPoints': 0
+        }
+
+    basePoints, limitName = get_limit_base_points(totalHan, fu)
+    if basePoints == None:
+        basePoints = fu * (2 ** (totalHan + 2))
+
+    payments = calculate_payment_breakdown(basePoints, scoreContext['winType'], scoreContext['isDealer'])
+    return {
+        'isValid': True,
+        'han': totalHan,
+        'fu': fu,
+        'yaku': yakuList,
+        'doraCount': doraCount,
+        'yakuman': [],
+        'payments': payments,
+        'limitName': limitName,
+        'totalPoints': payments['total']
+    }
+
+def build_yakuman_score_details(scoreContext, yakumanList):
+    yakumanCount = len(yakumanList)
+    basePoints = 8000 * yakumanCount
+    payments = calculate_payment_breakdown(basePoints, scoreContext['winType'], scoreContext['isDealer'])
+    return {
+        'isValid': True,
+        'han': None,
+        'fu': None,
+        'yaku': [],
+        'doraCount': 0,
+        'yakuman': yakumanList,
+        'yakumanCount': yakumanCount,
+        'payments': payments,
+        'limitName': 'Yakuman' if yakumanCount == 1 else str(yakumanCount) + 'x Yakuman',
+        'totalPoints': payments['total']
+    }
+
+def get_score_context(winType, playerIndex=0, winningTile=None):
+    winningTile = get_default_winning_tile(winType, playerIndex, winningTile)
+
+    concealedTiles = get_concealed_tiles_for_scoring(winType, playerIndex, winningTile)
+    return {
+        'playerIndex': playerIndex,
+        'player': app.players[playerIndex],
+        'winType': winType,
+        'winningTile': winningTile,
+        'concealedTiles': concealedTiles,
+        'callMelds': get_call_melds(playerIndex),
+        'fullTiles': get_all_tiles_for_yaku_check(winType, playerIndex, winningTile),
+        'seatWind': get_player_seat_wind(playerIndex),
+        'roundWind': app.roundWind,
+        'isDealer': playerIndex == app.dealerIndex,
+        'isClosed': get_hand_closed_state(playerIndex)
+    }
+
+def get_hand_yaku_and_score(winType, playerIndex=0, winningTile=None, includeDora=False):
+    scoreContext = get_score_context(winType, playerIndex, winningTile)
+
+    if is_valid_win_hand(scoreContext['concealedTiles'], playerIndex) == False:
+        return {
+            'isValid': False,
+            'han': 0,
+            'fu': 0,
+            'yaku': [],
+            'doraCount': 0,
+            'yakuman': [],
+            'payments': None,
+            'limitName': None,
+            'totalPoints': 0,
+            'playerIndex': playerIndex,
+            'winType': winType
+        }
+
+    specialYakuman = evaluate_yakuman(scoreContext, None)
+    if len(specialYakuman) > 0:
+        scoreDetails = build_yakuman_score_details(scoreContext, specialYakuman)
+        scoreDetails['playerIndex'] = playerIndex
+        scoreDetails['winType'] = winType
+        return scoreDetails
+
+    if is_seven_pairs(scoreContext['concealedTiles']):
+        yakuList = []
+        if scoreContext['player']['riichiDeclared'] and scoreContext['isClosed']:
+            add_yaku(yakuList, 1, 'Riichi')
+        if scoreContext['isClosed'] and winType == 'tsumo':
+            add_yaku(yakuList, 1, 'Menzen Tsumo')
+        add_yaku(yakuList, 2, 'Seven Pairs')
+        if is_all_simples(scoreContext['fullTiles']) and (scoreContext['isClosed'] or app.openTanyaoEnabled):
+            add_yaku(yakuList, 1, 'Tanyao')
+        if all(is_terminal_or_honor(tile) for tile in scoreContext['fullTiles']):
+            add_yaku(yakuList, 2, 'Honroutou')
+        if is_half_flush(scoreContext['fullTiles']):
+            add_yaku(yakuList, 3 if scoreContext['isClosed'] else 2, 'Honitsu')
+        elif is_full_flush(scoreContext['fullTiles']):
+            add_yaku(yakuList, 6 if scoreContext['isClosed'] else 5, 'Chinitsu')
+        scoreDetails = build_score_details(scoreContext, yakuList, 25, includeDora)
+        scoreDetails['playerIndex'] = playerIndex
+        scoreDetails['winType'] = winType
+        return scoreDetails
+
+    standardResults = get_standard_hand_decompositions(scoreContext['concealedTiles'], playerIndex)
+    bestScoreDetails = None
+
+    for standardResult in standardResults:
+        yakumanList = evaluate_yakuman(scoreContext, standardResult)
+        if len(yakumanList) > 0:
+            scoreDetails = build_yakuman_score_details(scoreContext, yakumanList)
+        else:
+            yakuList = evaluate_standard_yaku(scoreContext, standardResult)
+            fu = calculate_standard_fu(scoreContext, standardResult, yakuList)
+            scoreDetails = build_score_details(scoreContext, yakuList, fu, includeDora)
+
+        scoreDetails['playerIndex'] = playerIndex
+        scoreDetails['winType'] = winType
+
+        if bestScoreDetails == None or scoreDetails['totalPoints'] > bestScoreDetails['totalPoints']:
+            bestScoreDetails = scoreDetails
+        elif scoreDetails['totalPoints'] == bestScoreDetails['totalPoints']:
+            currentHan = -1 if scoreDetails['han'] == None else scoreDetails['han']
+            bestHan = -1 if bestScoreDetails['han'] == None else bestScoreDetails['han']
+            if currentHan > bestHan:
+                bestScoreDetails = scoreDetails
+            elif currentHan == bestHan and scoreDetails['fu'] != None and bestScoreDetails['fu'] != None and scoreDetails['fu'] > bestScoreDetails['fu']:
+                bestScoreDetails = scoreDetails
+
+    if bestScoreDetails == None:
+        return {
+            'isValid': False,
+            'han': 0,
+            'fu': 0,
+            'yaku': [],
+            'doraCount': 0,
+            'yakuman': [],
+            'payments': None,
+            'limitName': None,
+            'totalPoints': 0,
+            'playerIndex': playerIndex,
+            'winType': winType
+        }
+
+    return bestScoreDetails
+
+def format_score_text(scoreDetails):
+    if scoreDetails['isValid'] == False:
+        return 'No scoring yaku'
+
+    if len(scoreDetails['yakuman']) > 0:
+        return str(scoreDetails['totalPoints']) + ' points'
+
+    payments = scoreDetails['payments']
+    scoreText = str(scoreDetails['totalPoints']) + ' points'
+
+    if 'ron' in payments:
+        scoreText += ' (' + str(payments['ron']) + ' ron)'
+    else:
+        scoreText += ' (' + str(payments['nonDealerPays']) + '/' + str(payments['dealerPays']) + ' tsumo)'
+
+    return scoreText
+
+def format_yaku_lines(scoreDetails):
+    if scoreDetails['isValid'] == False:
+        return ['No scoring yaku']
+
+    if len(scoreDetails['yakuman']) > 0:
+        yakuLines = [scoreDetails['limitName']]
+        for yakumanName in scoreDetails['yakuman']:
+            yakuLines.append(yakumanName)
+        return yakuLines
+
+    yakuLines = [str(scoreDetails['han']) + ' han, ' + str(scoreDetails['fu']) + ' fu']
+
+    if scoreDetails['limitName'] != None:
+        yakuLines.append(scoreDetails['limitName'])
+
+    for yaku in scoreDetails['yaku']:
+        yakuLines.append(yaku['name'] + ' (' + str(yaku['han']) + ')')
+
+    if scoreDetails['doraCount'] > 0:
+        yakuLines.append('Dora (' + str(scoreDetails['doraCount']) + ')')
+
+    return yakuLines
+
+def has_player_yaku(winType, playerIndex=0, winningTile=None):
+    scoreDetails = get_hand_yaku_and_score(winType, playerIndex, winningTile, includeDora=False)
+    return scoreDetails['isValid']
 
 def update_player_action_prompt():
     app.actionOptions = []
@@ -947,7 +1741,7 @@ def update_player_action_prompt():
         app.actionPromptOpen = True
         return
 
-    if app.players[0]['isMenzenchin'] and app.players[0]['riichiDeclared'] == False and hand_is_tenpai_for_riichi(fullHand):
+    if player_hand_is_closed(app.mainPlayerIndex) and app.players[0]['riichiDeclared'] == False and hand_is_tenpai_for_riichi(fullHand):
         app.actionOptions = ['Riichi', 'Pass']
         app.actionPromptOpen = True
 
@@ -1064,14 +1858,14 @@ def draw_action_buttons():
     
     
 def get_menzenchin_text(playerIndex):
-    if app.players[playerIndex]['isMenzenchin']:
+    if player_hand_is_closed(playerIndex):
         return 'Menzenchin'
     return 'Open Hand'
 
 def start_new_hand():
     reset_round_state()
     app.players, app.wall = deal_starting_hands()
-    app.hand = app.players[0]['hand']
+    app.hand = app.players[app.mainPlayerIndex]['hand']
     initialize_dora_state()
     
     app.TotalHandWidth = len(app.hand) * TileWidth + (len(app.hand) - 1) * TileGap
@@ -1095,10 +1889,10 @@ def start_with_custom_hand(playerHand):
     
     # Deal hands for other players
     players = [
-        {'hand': playerHand[:], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False},
-        {'hand': [], 'discards': [], 'calls': [], 'isMenzenchin': True, 'riichiDeclared': False}
+        {'hand': playerHand[:], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None},
+        {'hand': [], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None},
+        {'hand': [], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None},
+        {'hand': [], 'discards': [], 'calls': [], 'riichiDeclared': False, 'lastDrawnTile': None}
     ]
     
     # Deal to other players
@@ -1110,7 +1904,7 @@ def start_with_custom_hand(playerHand):
     # Player's hand is already set
     app.players = players
     app.wall = newWall
-    app.hand = app.players[0]['hand']
+    app.hand = app.players[app.mainPlayerIndex]['hand']
     initialize_dora_state()
     
     app.TotalHandWidth = len(app.hand) * TileWidth + (len(app.hand) - 1) * TileGap
@@ -1205,9 +1999,26 @@ def draw_round_result_overlay():
     if app.roundResult == 'win':
         app.scene.add(Label('YOU WIN', 200, 170, size=28, fill='gold', bold=True))
         app.scene.add(Label(app.roundResultReason, 200, 205, size=18, fill='white', bold=True))
+        if app.roundScoreText != '':
+            app.scene.add(Label(app.roundScoreText, 200, 232, size=12, fill='lightBlue', bold=True))
     elif app.roundResult == 'loss':
         app.scene.add(Label('YOU LOSE', 200, 170, size=28, fill='red', bold=True))
         app.scene.add(Label(app.roundResultReason, 200, 205, size=18, fill='white', bold=True))
+        if app.roundScoreText != '':
+            app.scene.add(Label(app.roundScoreText, 200, 232, size=12, fill='lightBlue', bold=True))
+
+    if len(app.roundYakuLines) > 0:
+        panelX = 272
+        panelY = 132
+        panelW = 118
+        panelH = 132
+        lineY = panelY + 28
+
+        app.scene.add(Rect(panelX, panelY, panelW, panelH, fill=rgb(24, 40, 56), border='white', borderWidth=1, opacity=92))
+        app.scene.add(Label('Yaku', panelX + panelW / 2, panelY + 13, size=12, fill='gold', bold=True))
+
+        for i in range(min(len(app.roundYakuLines), 7)):
+            app.scene.add(Label(app.roundYakuLines[i], panelX + 8, lineY + i * 14, size=9, fill='white', align='left'))
         
     buttonX = 145
     buttonY = 240
@@ -1225,31 +2036,22 @@ def draw_round_result_overlay():
         }
 
 
-#Not a proper Furiten warning, just calls out no current Yaku if open hand FIX THIS LATER
 def update_no_yaku_warning():
     app.noYakuWarning = ''
-    
-    if app.players[0]['isMenzenchin']:
+
+    if player_hand_is_closed(app.mainPlayerIndex):
         return
-    
-    possibleOpenYaku = False
-    fullTiles = app.hand[:]
-    
-    for call in app.players[0]['calls']:
-        for tile in call['tiles']:
-            fullTiles.append(tile)
-            
-    if hand_has_triplet(fullTiles, 'E'):
-        possibleOpenYaku = True
-    if hand_has_triplet(fullTiles, 'Wh'):
-        possibleOpenYaku = True
-    if hand_has_triplet(fullTiles, 'G'):
-        possibleOpenYaku = True
-    if hand_has_triplet(fullTiles, 'R'):
-        possibleOpenYaku = True
-        
-    if possibleOpenYaku == False:
-        app.noYakuWarning = 'No Yaku'
+
+    seatWind = get_player_seat_wind(app.mainPlayerIndex)
+    for meld in get_call_melds(app.mainPlayerIndex):
+        if meld['type'] != 'triplet' and meld['type'] != 'kan':
+            continue
+
+        meldTile = get_meld_base_tile(meld)
+        if meldTile in DragonTiles or meldTile == seatWind or meldTile == app.roundWind:
+            return
+
+    app.noYakuWarning = 'No Yaku'
 
 def get_tutorial_page_count():
     return 4
@@ -1312,9 +2114,9 @@ def draw_tutorial_page_3():
     app.scene.add(Label('A winning hand needs a yaku.', 200, 155, size=15, fill='lightBlue', bold=True))
     
     app.scene.add(Label('Yaku in this version:', 200, 185, size=14, fill='white', bold=True))
-    app.scene.add(Label('Menzen Tsumo / Closed Hand Draw', 200, 208, size=13, fill='white'))
-    app.scene.add(Label('East triplet', 200, 228, size=13, fill='white'))
-    app.scene.add(Label('White / Green / Red triplet', 200, 248, size=13, fill='white'))
+    app.scene.add(Label('Riichi, Tanyao, Pinfu, Iipeikou', 200, 208, size=13, fill='white'))
+    app.scene.add(Label('Yakuhai, Toitoi, Sanshoku, Ittsu', 200, 228, size=13, fill='white'))
+    app.scene.add(Label('Honitsu, Chinitsu, Chanta and more', 200, 248, size=13, fill='white'))
     
     app.scene.add(Label('Example yaku:', 200, 280, size=14, fill='lightBlue', bold=True))
     
@@ -1628,11 +2430,13 @@ def draw_tile_for_player():
     if app.drawnTile is not None:
         app.hand.append(app.drawnTile)
         sort_hand(app.hand)
+        app.players[app.mainPlayerIndex]['lastDrawnTile'] = None
     
     if len(app.wall) == 0:
         return
     
     app.drawnTile = app.wall.pop()
+    app.players[app.mainPlayerIndex]['lastDrawnTile'] = app.drawnTile
     
 def draw_tile_for_ai(playerIndex):
     if len(app.wall) == 0:
@@ -1640,6 +2444,7 @@ def draw_tile_for_ai(playerIndex):
     
     drawnTile = app.wall.pop()
     app.players[playerIndex]['hand'].append(drawnTile)
+    app.players[playerIndex]['lastDrawnTile'] = drawnTile
     sort_hand(app.players[playerIndex]['hand'])
     
 def ai_discard_random_tile(playerIndex):
@@ -1652,6 +2457,7 @@ def ai_discard_random_tile(playerIndex):
     app.lastDiscardedTile = discardedTile
     app.lastDiscarder = playerIndex
     app.previewTile = discardedTile
+    app.players[playerIndex]['lastDrawnTile'] = None
     sort_hand(app.players[playerIndex]['hand'])
     
 def start_ai_turns():
@@ -1678,6 +2484,8 @@ def discard_selected_tile():
         app.hand.append(app.drawnTile)
         app.drawnTile = None
         sort_hand(app.hand)
+
+    app.players[app.mainPlayerIndex]['lastDrawnTile'] = None
         
     app.players[0]['discards'].append(discardedTile)
     
@@ -1692,12 +2500,6 @@ def discard_selected_tile():
     
     redraw_game()
     start_ai_turns()
-    
-def set_player_open_hand(playerIndex):
-    app.players[playerIndex]['isMenzenchin'] = False
-    
-def set_player_closed_hand(playerIndex):
-    app.players[playerIndex]['isMenzenchin'] = True
     
 def can_player_pon(tile):
     return app.hand.count(tile) >= 2
@@ -1801,12 +2603,12 @@ def resolve_player_pon():
         })
         
     remove_last_discard_from_player(discarder)
-    set_player_open_hand(0)
     
     app.currentPlayer = 0
     app.aiThinking = False
     app.pendingAiPlayers = []
     app.drawnTile = None
+    app.players[app.mainPlayerIndex]['lastDrawnTile'] = None
     app.selectedHandIndex = None
     app.previewTile = tile
     sort_hand(app.hand)
@@ -1832,12 +2634,12 @@ def resolve_player_chi(chiTiles):
         })
         
     remove_last_discard_from_player(discarder)
-    set_player_open_hand(0)
     
     app.currentPlayer = 0
     app.aiThinking = False
     app.pendingAiPlayers = []
     app.drawnTile = None
+    app.players[app.mainPlayerIndex]['lastDrawnTile'] = None
     app.selectedHandIndex = None
     app.previewTile = tile
     sort_hand(app.hand)
@@ -1858,8 +2660,6 @@ def resolve_player_closed_kan(tile):
         'tiles': [tile, tile, tile, tile],
         'from': -1
         })
-    
-    set_player_open_hand(0)
     
     app.currentPlayer = 0
     app.selectedHandIndex = None
@@ -1889,7 +2689,6 @@ def resolve_player_open_kan():
         })
     
     remove_last_discard_from_player(discarder)
-    set_player_open_hand(0)
     
     app.currentPlayer = 0
     app.aiThinking = False
@@ -1908,10 +2707,18 @@ def resolve_player_open_kan():
     update_no_yaku_warning()
     update_player_action_prompt()
 
-def end_round_as_win(reason):
+def end_round_as_win(reason, winnerIndex=0, winningTile=None):
+    scoreDetails = get_hand_yaku_and_score(reason.lower(), winnerIndex, winningTile, includeDora=True)
     app.handOver = True
-    app.roundResult = 'win'
-    app.roundResultReason = reason
+    app.roundWinnerIndex = winnerIndex
+    app.roundResult = 'win' if winnerIndex == app.mainPlayerIndex else 'loss'
+    winnerName = get_player_display_name(winnerIndex)
+    if winnerIndex == app.mainPlayerIndex:
+        app.roundResultReason = reason
+    else:
+        app.roundResultReason = winnerName + ' won by ' + reason
+    app.roundScoreText = format_score_text(scoreDetails)
+    app.roundYakuLines = format_yaku_lines(scoreDetails)
     app.actionPromptOpen = False
     app.actionOptions = []
     app.aiThinking = False
@@ -2092,10 +2899,6 @@ def onStep():
     else:
         app.aiDelayCounter = app.aiTurnDelay
                 
-def toggle_player_menzenchin_for_test():
-    app.players[0]['isMenzenchin'] = not app.players[0]['isMenzenchin']
-    redraw_game()
-
 def onKeyPress(key):
     if app.currentScene == 'room':
         if key == 'w':
