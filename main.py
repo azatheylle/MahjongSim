@@ -33,6 +33,7 @@ app.pendingCallTile = None
 app.pendingCallDiscarder = None
 app.pendingKanTile = None
 app.pendingKanType = None
+app.pendingAiReactionDiscarder = None
 app.roundResult = None
 app.roundResultReason = ''
 app.roundScoreText = ''
@@ -214,6 +215,7 @@ def reset_round_state():
     app.pendingCallDiscarder = None
     app.pendingKanTile = None
     app.pendingKanType = None
+    app.pendingAiReactionDiscarder = None
     app.roundResult = None
     app.roundResultReason = ''
     app.roundScoreText = ''
@@ -2002,10 +2004,16 @@ def draw_round_result_overlay():
         if app.roundScoreText != '':
             app.scene.add(Label(app.roundScoreText, 200, 232, size=12, fill='lightBlue', bold=True))
     elif app.roundResult == 'loss':
-        app.scene.add(Label('YOU LOSE', 200, 170, size=28, fill='red', bold=True))
-        app.scene.add(Label(app.roundResultReason, 200, 205, size=18, fill='white', bold=True))
+        app.scene.add(Label('YOU LOSE', 200, 160, size=28, fill='red', bold=True))
+        lossReason = app.roundResultReason
+        if ' won by ' in lossReason:
+            winnerName, winType = lossReason.split(' won by ', 1)
+            app.scene.add(Label(winnerName, 200, 188, size=18, fill='white', bold=True))
+            app.scene.add(Label('won by ' + winType, 200, 208, size=18, fill='white', bold=True))
+        else:
+            app.scene.add(Label(lossReason, 200, 196, size=18, fill='white', bold=True))
         if app.roundScoreText != '':
-            app.scene.add(Label(app.roundScoreText, 200, 232, size=12, fill='lightBlue', bold=True))
+            app.scene.add(Label(app.roundScoreText, 200, 224, size=12, fill='lightBlue', bold=True))
 
     if len(app.roundYakuLines) > 0:
         panelX = 272
@@ -2113,10 +2121,9 @@ def draw_tutorial_page_3():
     
     app.scene.add(Label('A winning hand needs a yaku.', 200, 155, size=15, fill='lightBlue', bold=True))
     
-    app.scene.add(Label('Yaku in this version:', 200, 185, size=14, fill='white', bold=True))
-    app.scene.add(Label('Riichi, Tanyao, Pinfu, Iipeikou', 200, 208, size=13, fill='white'))
-    app.scene.add(Label('Yakuhai, Toitoi, Sanshoku, Ittsu', 200, 228, size=13, fill='white'))
-    app.scene.add(Label('Honitsu, Chinitsu, Chanta and more', 200, 248, size=13, fill='white'))
+    app.scene.add(Label('Basic Yaku:', 200, 185, size=14, fill='white', bold=True))
+    app.scene.add(Label('Seat wind (East)', 200, 208, size=13, fill='white'))
+    app.scene.add(Label('Dragons (Wh, G, R)', 200, 228, size=13, fill='white'))
     
     app.scene.add(Label('Example yaku:', 200, 280, size=14, fill='lightBlue', bold=True))
     
@@ -2279,7 +2286,7 @@ def draw_room_scene():
                        app.playerSize,
                        fill='gold', border='black'))
 
-    app.scene.add(Label('Tutorial NPC', 55, 354, size=11, fill='white', bold=True))
+    app.scene.add(Label('Tutorial', 55, 308, size=11, fill='white', bold=True))
 
     app.scene.add(Label('WASD to move', 75, 370, size=12, fill='white'))
     app.scene.add(Label('Walk to a table', 200, 370, size=12, fill='white'))
@@ -2446,25 +2453,657 @@ def draw_tile_for_ai(playerIndex):
     app.players[playerIndex]['hand'].append(drawnTile)
     app.players[playerIndex]['lastDrawnTile'] = drawnTile
     sort_hand(app.players[playerIndex]['hand'])
-    
-def ai_discard_random_tile(playerIndex):
-    if len(app.players[playerIndex]['hand']) == 0:
-        return
-    
-    randomIndex = random.randrange(len(app.players[playerIndex]['hand']))
-    discardedTile = app.players[playerIndex]['hand'].pop(randomIndex)
+
+def get_next_turn_player(playerIndex):
+    return (playerIndex - 1) % 4
+
+def get_ai_players_until_human_after(discarderIndex):
+    pendingPlayers = []
+    nextPlayer = get_next_turn_player(discarderIndex)
+
+    while nextPlayer != app.mainPlayerIndex:
+        pendingPlayers.append(nextPlayer)
+        nextPlayer = get_next_turn_player(nextPlayer)
+
+    return pendingPlayers
+
+def get_ai_closed_kan_tiles(playerIndex):
+    kanTiles = []
+    hand = app.players[playerIndex]['hand']
+
+    for tile in TileNamesByIndex:
+        if hand.count(tile) >= 4:
+            kanTiles.append(tile)
+
+    return kanTiles
+
+def can_ai_pon(playerIndex, tile):
+    return app.players[playerIndex]['hand'].count(tile) == 2
+
+def can_ai_kan_on_discard(playerIndex, tile):
+    return app.players[playerIndex]['hand'].count(tile) == 3
+
+def get_ai_chi_options(playerIndex, tile, discarderIndex):
+    chiOptions = []
+
+    if playerIndex != get_next_turn_player(discarderIndex):
+        return chiOptions
+
+    if tile in HonorOrder:
+        return chiOptions
+
+    hand = app.players[playerIndex]['hand']
+    number = int(tile[0])
+    suit = tile[1]
+    possibleSequences = [
+        [number - 2, number - 1, number],
+        [number - 1, number, number + 1],
+        [number, number + 1, number + 2]
+    ]
+
+    for sequence in possibleSequences:
+        if min(sequence) < 1 or max(sequence) > 9:
+            continue
+
+        neededTiles = []
+        for sequenceNumber in sequence:
+            sequenceTile = str(sequenceNumber) + suit
+            if sequenceTile != tile:
+                neededTiles.append(sequenceTile)
+
+        if all(hand.count(neededTile) >= 1 for neededTile in neededTiles):
+            chiOptions.append(neededTiles)
+
+    return chiOptions
+
+def is_ai_value_honor(tile, playerIndex):
+    if tile in DragonTiles:
+        return True
+    return tile == get_player_seat_wind(playerIndex) or tile == app.roundWind
+
+def tile_is_isolated_in_hand(tile, hand):
+    if hand.count(tile) >= 2:
+        return False
+
+    if tile in HonorOrder:
+        return True
+
+    number = int(tile[0])
+    suit = tile[1]
+    neighbors = []
+    if number > 1:
+        neighbors.append(str(number - 1) + suit)
+    if number < 9:
+        neighbors.append(str(number + 1) + suit)
+    if number > 2:
+        neighbors.append(str(number - 2) + suit)
+    if number < 8:
+        neighbors.append(str(number + 2) + suit)
+
+    for neighbor in neighbors:
+        if hand.count(neighbor) > 0:
+            return False
+
+    return True
+
+def tile_shape_score(tile, hand):
+    count = hand.count(tile)
+    score = 0
+
+    if count >= 2:
+        score += 10
+    if count >= 3:
+        score += 10
+
+    if tile in HonorOrder:
+        return score
+
+    number = int(tile[0])
+    suit = tile[1]
+    adjacentTiles = []
+    gapTiles = []
+
+    if number > 1:
+        adjacentTiles.append(str(number - 1) + suit)
+    if number < 9:
+        adjacentTiles.append(str(number + 1) + suit)
+    if number > 2:
+        gapTiles.append(str(number - 2) + suit)
+    if number < 8:
+        gapTiles.append(str(number + 2) + suit)
+
+    for adjacentTile in adjacentTiles:
+        if hand.count(adjacentTile) > 0:
+            score += 6
+
+    for gapTile in gapTiles:
+        if hand.count(gapTile) > 0:
+            score += 3
+
+    return score
+
+def count_complete_sequences_in_hand(hand):
+    counts = build_tile_counts(hand)
+    completeSequences = 0
+
+    for suitStart in [0, 9, 18]:
+        for offset in range(7):
+            while (
+                counts[suitStart + offset] > 0 and
+                counts[suitStart + offset + 1] > 0 and
+                counts[suitStart + offset + 2] > 0
+            ):
+                counts[suitStart + offset] -= 1
+                counts[suitStart + offset + 1] -= 1
+                counts[suitStart + offset + 2] -= 1
+                completeSequences += 1
+
+    return completeSequences
+
+def get_ai_flush_bias_score(fullTiles):
+    suitCounts = {'m': 0, 'p': 0, 's': 0}
+    honorCount = 0
+
+    for tile in fullTiles:
+        if tile in HonorOrder:
+            honorCount += 1
+        else:
+            suitCounts[tile[1]] += 1
+
+    maxSuitCount = max(suitCounts.values())
+    offSuitCount = sum(suitCounts.values()) - maxSuitCount
+
+    if maxSuitCount >= 8 and offSuitCount <= 2:
+        return 18
+    if maxSuitCount >= 6 and offSuitCount <= 3:
+        return 8
+    if honorCount > 0 and maxSuitCount >= 7 and offSuitCount <= 1:
+        return 6
+
+    return 0
+
+def get_ai_open_yaku_score(concealedHand, playerIndex, extraCall=None):
+    allCalls = get_call_melds(playerIndex)
+    fullTiles = concealedHand[:]
+
+    if extraCall != None:
+        allCalls.append(extraCall)
+
+    for meld in allCalls:
+        for tile in meld['tiles']:
+            fullTiles.append(tile)
+
+    score = 0
+
+    if app.openTanyaoEnabled and len(fullTiles) > 0 and is_all_simples(fullTiles):
+        score += 28
+
+    for meld in allCalls:
+        if meld['type'] != 'triplet' and meld['type'] != 'kan':
+            continue
+
+        meldTile = get_meld_base_tile(meld)
+        if is_ai_value_honor(meldTile, playerIndex):
+            score += 36
+
+    pairLikeTiles = 0
+    concealedCounts = count_tile_occurrences(concealedHand)
+    for tile, count in concealedCounts.items():
+        if count >= 2:
+            pairLikeTiles += 1
+
+    tripletLikeCalls = len([meld for meld in allCalls if meld['type'] == 'triplet' or meld['type'] == 'kan'])
+    if pairLikeTiles + tripletLikeCalls >= 4:
+        score += 16
+
+    score += get_ai_flush_bias_score(fullTiles)
+    return score
+
+def score_ai_hand_state(hand, playerIndex, assumeClosed=True):
+    score = 0
+    counts = count_tile_occurrences(hand)
+
+    for tile, count in counts.items():
+        if count >= 2:
+            score += 12
+        if count >= 3:
+            score += 16
+        if count >= 4:
+            score += 6
+
+        tileScore = tile_shape_score(tile, hand)
+        if count == 1:
+            score += tileScore
+
+        if tile_is_isolated_in_hand(tile, hand):
+            if tile in HonorOrder:
+                if is_ai_value_honor(tile, playerIndex):
+                    score -= 8
+                else:
+                    score -= 18
+            elif is_terminal(tile):
+                score -= 12
+            else:
+                score -= 5
+
+    score += count_complete_sequences_in_hand(hand) * 16
+    score += count_dora(hand) * 6
+
+    if len(hand) == 13 and is_tenpai_hand(hand):
+        score += 40
+
+    if assumeClosed:
+        score += 8
+
+    simpleTiles = len([tile for tile in hand if is_simple_tile(tile)])
+    terminalOrHonorTiles = len(hand) - simpleTiles
+    if terminalOrHonorTiles <= 2:
+        score += 10
+    elif terminalOrHonorTiles >= 6:
+        score -= 4
+
+    for tile, count in counts.items():
+        if count >= 2 and is_ai_value_honor(tile, playerIndex):
+            score += 10
+
+    score += get_ai_flush_bias_score(hand)
+    return score
+
+def get_ai_discard_bonus(tile, hand, playerIndex):
+    bonus = 0
+
+    if tile_is_isolated_in_hand(tile, hand):
+        if tile in HonorOrder and is_ai_value_honor(tile, playerIndex) == False:
+            bonus += 18
+        elif is_terminal(tile):
+            bonus += 10
+        else:
+            bonus += 4
+
+    if hand.count(tile) >= 2:
+        bonus -= 10
+    if hand.count(tile) >= 3:
+        bonus -= 12
+    if tile_shape_score(tile, hand) >= 12:
+        bonus -= 8
+    if tile_is_revealed_dora(tile):
+        bonus -= 10
+
+    return bonus
+
+def choose_ai_discard(playerIndex, hand=None, assumeClosed=None):
+    if hand == None:
+        hand = app.players[playerIndex]['hand'][:]
+
+    if assumeClosed == None:
+        assumeClosed = get_hand_closed_state(playerIndex)
+
+    bestIndex = 0
+    bestTile = hand[0]
+    bestScore = None
+
+    for index in range(len(hand)):
+        tile = hand[index]
+        remainingHand = hand[:index] + hand[index + 1:]
+        candidateScore = score_ai_hand_state(remainingHand, playerIndex, assumeClosed=assumeClosed)
+        candidateScore += get_ai_discard_bonus(tile, hand, playerIndex)
+
+        if bestScore == None or candidateScore > bestScore:
+            bestScore = candidateScore
+            bestIndex = index
+            bestTile = tile
+        elif candidateScore == bestScore and tile_sort_key(tile) > tile_sort_key(bestTile):
+            bestIndex = index
+            bestTile = tile
+
+    return bestIndex, bestTile, bestScore
+
+def ai_can_win_by_tsumo(playerIndex):
+    hand = app.players[playerIndex]['hand'][:]
+    if is_valid_win_hand(hand, playerIndex) == False:
+        return False
+    return has_player_yaku('tsumo', playerIndex)
+
+def ai_can_win_by_ron(playerIndex, tile):
+    hand = app.players[playerIndex]['hand'][:]
+    hand.append(tile)
+    if is_valid_win_hand(hand, playerIndex) == False:
+        return False
+    return has_player_yaku('ron', playerIndex, tile)
+
+def should_ai_call_closed_kan(playerIndex, tile):
+    if app.players[playerIndex]['hand'].count(tile) < 4:
+        return False
+
+    if is_ai_value_honor(tile, playerIndex) or tile_is_revealed_dora(tile):
+        return True
+
+    concealedCounts = count_tile_occurrences(app.players[playerIndex]['hand'])
+    pairLikeTiles = len([count for count in concealedCounts.values() if count >= 2])
+    return pairLikeTiles >= 4
+
+def build_ai_call_meld(callType, tiles, discarderIndex):
+    meldType = 'sequence'
+    if callType == 'Pon':
+        meldType = 'triplet'
+    elif callType == 'Kan':
+        meldType = 'kan'
+
+    return {
+        'type': meldType,
+        'tiles': tiles[:],
+        'open': True,
+        'fromCall': True,
+        'from': discarderIndex
+    }
+
+def evaluate_ai_pon_decision(playerIndex, tile, discarderIndex):
+    if can_ai_pon(playerIndex, tile) == False:
+        return None
+
+    currentHand = app.players[playerIndex]['hand'][:]
+    passScore = score_ai_hand_state(currentHand, playerIndex, assumeClosed=True)
+
+    handAfterCall = currentHand[:]
+    remove_tiles_from_hand(handAfterCall, tile, 2)
+    _, discardTile, callScore = choose_ai_discard(playerIndex, handAfterCall, assumeClosed=False)
+    meld = build_ai_call_meld('Pon', [tile, tile, tile], discarderIndex)
+    callScore += get_ai_open_yaku_score(handAfterCall, playerIndex, meld)
+
+    if is_ai_value_honor(tile, playerIndex):
+        callScore += 18
+
+    if get_ai_open_yaku_score(handAfterCall, playerIndex, meld) < 18:
+        return None
+
+    if callScore < passScore + 8 and is_ai_value_honor(tile, playerIndex) == False:
+        return None
+
+    return {
+        'type': 'Pon',
+        'playerIndex': playerIndex,
+        'tile': tile,
+        'discarderIndex': discarderIndex,
+        'score': callScore,
+        'discardTile': discardTile
+    }
+
+def evaluate_ai_chi_decision(playerIndex, tile, discarderIndex):
+    chiOptions = get_ai_chi_options(playerIndex, tile, discarderIndex)
+    if len(chiOptions) == 0:
+        return None
+
+    currentHand = app.players[playerIndex]['hand'][:]
+    passScore = score_ai_hand_state(currentHand, playerIndex, assumeClosed=True)
+    bestDecision = None
+
+    for chiTiles in chiOptions:
+        handAfterCall = currentHand[:]
+        for chiTile in chiTiles:
+            handAfterCall.remove(chiTile)
+
+        fullCallTiles = chiTiles[:] + [tile]
+        sort_hand(fullCallTiles)
+        meld = build_ai_call_meld('Chi', fullCallTiles, discarderIndex)
+        openYakuScore = get_ai_open_yaku_score(handAfterCall, playerIndex, meld)
+        if openYakuScore < 18:
+            continue
+
+        _, discardTile, callScore = choose_ai_discard(playerIndex, handAfterCall, assumeClosed=False)
+        callScore += openYakuScore
+
+        if callScore < passScore + 12:
+            continue
+
+        decision = {
+            'type': 'Chi',
+            'playerIndex': playerIndex,
+            'tile': tile,
+            'discarderIndex': discarderIndex,
+            'chiTiles': chiTiles[:],
+            'score': callScore,
+            'discardTile': discardTile
+        }
+        if bestDecision == None or decision['score'] > bestDecision['score']:
+            bestDecision = decision
+
+    return bestDecision
+
+def evaluate_ai_open_kan_decision(playerIndex, tile, discarderIndex):
+    if can_ai_kan_on_discard(playerIndex, tile) == False:
+        return None
+
+    currentHand = app.players[playerIndex]['hand'][:]
+    passScore = score_ai_hand_state(currentHand, playerIndex, assumeClosed=True)
+    handAfterCall = currentHand[:]
+    remove_tiles_from_hand(handAfterCall, tile, 3)
+    meld = build_ai_call_meld('Kan', [tile, tile, tile, tile], discarderIndex)
+    openYakuScore = get_ai_open_yaku_score(handAfterCall, playerIndex, meld)
+
+    if openYakuScore < 22 and is_ai_value_honor(tile, playerIndex) == False:
+        return None
+
+    _, discardTile, callScore = choose_ai_discard(playerIndex, handAfterCall, assumeClosed=False)
+    callScore += openYakuScore
+
+    if is_ai_value_honor(tile, playerIndex) or tile_is_revealed_dora(tile):
+        callScore += 16
+
+    if callScore < passScore + 14 and is_ai_value_honor(tile, playerIndex) == False:
+        return None
+
+    return {
+        'type': 'Kan',
+        'playerIndex': playerIndex,
+        'tile': tile,
+        'discarderIndex': discarderIndex,
+        'score': callScore,
+        'discardTile': discardTile
+    }
+
+def choose_ai_pon_or_kan_reaction_for_player(playerIndex, tile, discarderIndex):
+    kanDecision = evaluate_ai_open_kan_decision(playerIndex, tile, discarderIndex)
+    ponDecision = evaluate_ai_pon_decision(playerIndex, tile, discarderIndex)
+
+    if kanDecision == None:
+        return ponDecision
+    if ponDecision == None:
+        return kanDecision
+    if kanDecision['score'] >= ponDecision['score']:
+        return kanDecision
+    return ponDecision
+
+def choose_ai_call_reaction(discarderIndex):
+    tile = app.lastDiscardedTile
+    if tile == None:
+        return None
+
+    reactionOrder = []
+    nextPlayer = get_next_turn_player(discarderIndex)
+    for i in range(3):
+        if nextPlayer != app.mainPlayerIndex:
+            reactionOrder.append(nextPlayer)
+        nextPlayer = get_next_turn_player(nextPlayer)
+
+    for playerIndex in reactionOrder:
+        if ai_can_win_by_ron(playerIndex, tile):
+            return {
+                'type': 'Ron',
+                'playerIndex': playerIndex,
+                'tile': tile,
+                'discarderIndex': discarderIndex,
+                'score': 10 ** 9
+            }
+
+    for playerIndex in reactionOrder:
+        ponOrKanDecision = choose_ai_pon_or_kan_reaction_for_player(playerIndex, tile, discarderIndex)
+        if ponOrKanDecision != None:
+            return ponOrKanDecision
+
+    nextPlayer = get_next_turn_player(discarderIndex)
+    if nextPlayer != 0:
+        return evaluate_ai_chi_decision(nextPlayer, tile, discarderIndex)
+
+    return None
+
+def commit_ai_discard(playerIndex, discardedTile):
     app.players[playerIndex]['discards'].append(discardedTile)
     app.lastDiscardedTile = discardedTile
     app.lastDiscarder = playerIndex
     app.previewTile = discardedTile
     app.players[playerIndex]['lastDrawnTile'] = None
     sort_hand(app.players[playerIndex]['hand'])
+
+def ai_discard_tile(playerIndex):
+    hand = app.players[playerIndex]['hand']
+    if len(hand) == 0:
+        return None
+
+    discardIndex, discardedTile, discardScore = choose_ai_discard(playerIndex)
+    hand.pop(discardIndex)
+    commit_ai_discard(playerIndex, discardedTile)
+    return {'tile': discardedTile, 'score': discardScore}
+
+def resolve_ai_pon(playerIndex, tile, discarderIndex):
+    hand = app.players[playerIndex]['hand']
+    remove_tiles_from_hand(hand, tile, 2)
+    app.players[playerIndex]['calls'].append({
+        'type': 'Pon',
+        'tiles': [tile, tile, tile],
+        'from': discarderIndex
+    })
+    remove_last_discard_from_player(discarderIndex)
+    app.currentPlayer = playerIndex
+    app.previewTile = tile
+    app.pendingAiPlayers = []
+    app.aiThinking = False
+    sort_hand(hand)
+
+def resolve_ai_chi(playerIndex, chiTiles, tile, discarderIndex):
+    hand = app.players[playerIndex]['hand']
+    for chiTile in chiTiles:
+        hand.remove(chiTile)
+
+    fullCallTiles = chiTiles[:] + [tile]
+    sort_hand(fullCallTiles)
+    app.players[playerIndex]['calls'].append({
+        'type': 'Chi',
+        'tiles': fullCallTiles,
+        'from': discarderIndex
+    })
+    remove_last_discard_from_player(discarderIndex)
+    app.currentPlayer = playerIndex
+    app.previewTile = tile
+    app.pendingAiPlayers = []
+    app.aiThinking = False
+    sort_hand(hand)
+
+def resolve_ai_open_kan(playerIndex, tile, discarderIndex):
+    hand = app.players[playerIndex]['hand']
+    remove_tiles_from_hand(hand, tile, 3)
+    app.players[playerIndex]['calls'].append({
+        'type': 'Kan',
+        'tiles': [tile, tile, tile, tile],
+        'from': discarderIndex
+    })
+    remove_last_discard_from_player(discarderIndex)
+    app.currentPlayer = playerIndex
+    app.previewTile = tile
+    app.pendingAiPlayers = []
+    app.aiThinking = False
+    sort_hand(hand)
+    reveal_next_dora_indicator()
+    draw_tile_for_ai(playerIndex)
+
+def resolve_ai_closed_kan(playerIndex, tile):
+    hand = app.players[playerIndex]['hand']
+    remove_tiles_from_hand(hand, tile, 4)
+    app.players[playerIndex]['calls'].append({
+        'type': 'Kan',
+        'tiles': [tile, tile, tile, tile],
+        'from': -1
+    })
+    app.currentPlayer = playerIndex
+    app.previewTile = tile
+    sort_hand(hand)
+    reveal_next_dora_indicator()
+    draw_tile_for_ai(playerIndex)
+
+def schedule_turns_after_discard(discarderIndex):
+    app.pendingAiPlayers = get_ai_players_until_human_after(discarderIndex)
+
+    if len(app.pendingAiPlayers) > 0:
+        app.aiThinking = True
+        app.aiDelayCounter = app.aiTurnDelay
+        app.currentPlayer = app.pendingAiPlayers[0]
+        return
+
+    app.aiThinking = False
+    app.currentPlayer = 0
+
+    if len(app.wall) == 0:
+        end_round_as_loss('Wall Exhausted')
+        return
+
+    draw_tile_for_player()
+    update_player_action_prompt()
+
+def resolve_ai_reactions_after_discard(discarderIndex):
+    aiReaction = choose_ai_call_reaction(discarderIndex)
+    if aiReaction != None:
+        if aiReaction['type'] == 'Ron':
+            app.gameMessage = 'RON!'
+            end_round_as_win('Ron', aiReaction['playerIndex'], aiReaction['tile'])
+            return
+
+        caller = aiReaction['playerIndex']
+        claimedTile = aiReaction['tile']
+
+        if aiReaction['type'] == 'Pon':
+            resolve_ai_pon(caller, claimedTile, discarderIndex)
+            app.gameMessage = 'PON'
+        elif aiReaction['type'] == 'Chi':
+            resolve_ai_chi(caller, aiReaction['chiTiles'], claimedTile, discarderIndex)
+            app.gameMessage = 'CHI'
+        elif aiReaction['type'] == 'Kan':
+            resolve_ai_open_kan(caller, claimedTile, discarderIndex)
+            app.gameMessage = 'KAN'
+            if ai_can_win_by_tsumo(caller):
+                app.gameMessage = 'TSUMO!'
+                end_round_as_win('Tsumo', caller)
+                return
+
+        ai_discard_tile(caller)
+        process_turn_flow_after_discard(caller)
+        return
+
+    schedule_turns_after_discard(discarderIndex)
+
+def process_turn_flow_after_discard(discarderIndex):
+    if app.handOver:
+        return
+
+    app.pendingAiReactionDiscarder = None
+
+    if discarderIndex != app.mainPlayerIndex:
+        update_player_ron_prompt()
+        if app.actionPromptOpen == False:
+            openCallActions = get_player_open_call_actions(app.lastDiscardedTile, discarderIndex)
+            if len(openCallActions) > 0:
+                app.pendingCallTile = app.lastDiscardedTile
+                app.pendingKanTile = app.lastDiscardedTile
+                app.pendingCallDiscarder = discarderIndex
+                show_player_discard_call_options(openCallActions)
+
+        if app.actionPromptOpen:
+            app.pendingAiReactionDiscarder = discarderIndex
+            app.aiThinking = False
+            return
+
+    resolve_ai_reactions_after_discard(discarderIndex)
     
 def start_ai_turns():
-    app.pendingAiPlayers = [3, 2, 1]
-    app.aiThinking = True
-    app.aiDelayCounter = app.aiTurnDelay
-    app.currentPlayer = 3
+    schedule_turns_after_discard(0)
     
 def discard_selected_tile():
     if app.selectedHandIndex == None:
@@ -2498,8 +3137,8 @@ def discard_selected_tile():
     app.actionPromptOpen = False
     app.actionOptions = []
     
+    process_turn_flow_after_discard(0)
     redraw_game()
-    start_ai_turns()
     
 def can_player_pon(tile):
     return app.hand.count(tile) >= 2
@@ -2739,6 +3378,7 @@ def handle_action_button(action):
         'Ron' in app.actionOptions or
         'Pon' in app.actionOptions or
         'Chi' in app.actionOptions or
+        any(option.startswith('Chi ') for option in app.actionOptions) or
         'Kan' in app.actionOptions  # only open kan on discard, not closed kans
         )
     
@@ -2793,6 +3433,7 @@ def handle_action_button(action):
         app.selectedHandIndex = None
         
     elif action == 'Pass':
+        reactionDiscarder = app.pendingAiReactionDiscarder
         app.actionPromptOpen = False
         app.actionOptions = []
         app.pendingChiOptions = []
@@ -2800,9 +3441,12 @@ def handle_action_button(action):
         app.pendingCallDiscarder = None
         app.pendingKanTile = None
         app.pendingKanType = None
+        app.pendingAiReactionDiscarder = None
         
         if wasReactionPrompt:
-            if len(app.pendingAiPlayers) > 0:
+            if reactionDiscarder != None:
+                resolve_ai_reactions_after_discard(reactionDiscarder)
+            elif len(app.pendingAiPlayers) > 0:
                 app.aiThinking = True
                 app.aiDelayCounter = app.aiTurnDelay
                 app.currentPlayer = app.pendingAiPlayers[0]
@@ -2876,28 +3520,27 @@ def onStep():
     app.currentPlayer = currentAi
     
     draw_tile_for_ai(currentAi)
-    ai_discard_random_tile(currentAi)
-    update_player_ron_prompt()
-    
-    if app.actionPromptOpen == False:
-        openCallActions = get_player_open_call_actions(app.lastDiscardedTile, currentAi)
-        if len(openCallActions) > 0:
-            app.pendingCallTile = app.lastDiscardedTile
-            app.pendingKanTile = app.lastDiscardedTile
-            app.pendingCallDiscarder = currentAi
-            show_player_discard_call_options(openCallActions)
-            
-    redraw_game()
-    
-    if app.actionPromptOpen:
-        app.aiThinking = False
+    if ai_can_win_by_tsumo(currentAi):
+        app.gameMessage = 'TSUMO!'
+        end_round_as_win('Tsumo', currentAi)
+        redraw_game()
         return
-    
-    if len(app.pendingAiPlayers) > 0:
-        app.currentPlayer = app.pendingAiPlayers[0]
-        app.aiDelayCounter = app.aiTurnDelay
-    else:
-        app.aiDelayCounter = app.aiTurnDelay
+
+    closedKanTiles = get_ai_closed_kan_tiles(currentAi)
+    for kanTile in closedKanTiles:
+        if should_ai_call_closed_kan(currentAi, kanTile):
+            resolve_ai_closed_kan(currentAi, kanTile)
+            app.gameMessage = 'KAN'
+            if ai_can_win_by_tsumo(currentAi):
+                app.gameMessage = 'TSUMO!'
+                end_round_as_win('Tsumo', currentAi)
+                redraw_game()
+                return
+            break
+
+    ai_discard_tile(currentAi)
+    process_turn_flow_after_discard(currentAi)
+    redraw_game()
                 
 def onKeyPress(key):
     if app.currentScene == 'room':
